@@ -131,7 +131,7 @@ class FastRCNNFocaltLossOutputLayers(FastRCNNOutputLayers):
         iou_ids = tuple(range(iou_targets.size(0)))
         iou_targets = iou_targets[iou_ids, iou_ids]
 
-        loss_iou_reg = smooth_l1_loss(fg_pred_ious, iou_targets, beta=0, reduction="sum")
+        loss_iou_reg = smooth_l1_loss(fg_pred_ious, iou_targets.detach(), beta=0, reduction="sum")
 
         return loss_iou_reg / max(gt_classes.numel(), 1.0)
 
