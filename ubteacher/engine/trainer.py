@@ -458,11 +458,15 @@ class UBTeacherTrainer(DefaultTrainer):
             )
             joint_proposal_dict["proposals_pseudo_rpn"] = pesudo_proposals_rpn_unsup_k
             # Pseudo_labeling for ROI head (bbox location/objectness)
-            pesudo_proposals_roih_unsup_k, _ = self.process_pseudo_label(
+            (
+                pesudo_proposals_roih_unsup_k,
+                num_pseudo_bbox_roi
+            ) = self.process_pseudo_label(
                 proposals_roih_unsup_k, cur_threshold,
                 "roih", "thresholding", iou_threshold
             )
             joint_proposal_dict["proposals_pseudo_roih"] = pesudo_proposals_roih_unsup_k
+            record_dict['num_pseudo_bbox_per_image'] = num_pseudo_bbox_roi
 
             #  add pseudo-label to unlabeled data
             unlabel_data_q = self.remove_label(unlabel_data_q)
