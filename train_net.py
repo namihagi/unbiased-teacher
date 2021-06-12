@@ -6,7 +6,7 @@ from detectron2.checkpoint import DetectionCheckpointer
 from detectron2.config import get_cfg
 from detectron2.engine import default_argument_parser, default_setup, launch
 
-from ubteacher import add_ubteacher_config
+from ubteacher import add_ubteacher_config, add_box_cnf_config
 from ubteacher.engine.trainer import UBTeacherTrainer, BaselineTrainer
 
 # hacky way to register
@@ -24,6 +24,7 @@ def setup(args):
     """
     cfg = get_cfg()
     add_ubteacher_config(cfg)
+    add_box_cnf_config(cfg)
     cfg.merge_from_file(args.config_file)
     cfg.merge_from_list(args.opts)
     cfg.freeze()

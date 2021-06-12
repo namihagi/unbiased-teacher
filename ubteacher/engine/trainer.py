@@ -240,6 +240,8 @@ class UBTeacherTrainer(DefaultTrainer):
         model_teacher = self.build_model(cfg)
         self.model_teacher = model_teacher
 
+        self.with_iou = cfg.MODEL.ROI_HEADS.IOU_HEAD
+
         # For training, wrap with DDP. But don't need this for inference.
         if comm.get_world_size() > 1:
             model = DistributedDataParallel(
@@ -316,7 +318,8 @@ class UBTeacherTrainer(DefaultTrainer):
     # =====================================================
     # ================== Pseduo-labeling ==================
     # =====================================================
-    def threshold_bbox(self, proposal_bbox_inst, thres=0.7, proposal_type="roih"):
+    def threshold_bbox(self, proposal_bbox_inst, thres=0.7,
+                       iou_thres=0.5, proposal_type="roih"):
         if proposal_type == "rpn":
             valid_map = proposal_bbox_inst.objectness_logits > thres
 
@@ -335,6 +338,8 @@ class UBTeacherTrainer(DefaultTrainer):
             ]
         elif proposal_type == "roih":
             valid_map = proposal_bbox_inst.scores > thres
+            if self.with_iou:
+                valid_map = valid_map & (proposal_bbox_inst.pred_ious > iou_thres)
 
             # create instances containing boxes and gt_classes
             image_shape = proposal_bbox_inst.image_size
@@ -348,11 +353,14 @@ class UBTeacherTrainer(DefaultTrainer):
             new_proposal_inst.gt_boxes = new_boxes
             new_proposal_inst.gt_classes = proposal_bbox_inst.pred_classes[valid_map]
             new_proposal_inst.scores = proposal_bbox_inst.scores[valid_map]
+            if self.with_iou:
+                new_proposal_inst.ious = proposal_bbox_inst.pred_ious[valid_map]
 
         return new_proposal_inst
 
     def process_pseudo_label(
-        self, proposals_rpn_unsup_k, cur_threshold, proposal_type, psedo_label_method=""
+        self, proposals_rpn_unsup_k, cur_threshold, proposal_type,
+        psedo_label_method="", iou_threshold=0.5
     ):
         list_instances = []
         num_proposal_output = 0.0
@@ -360,7 +368,8 @@ class UBTeacherTrainer(DefaultTrainer):
             # thresholding
             if psedo_label_method == "thresholding":
                 proposal_bbox_inst = self.threshold_bbox(
-                    proposal_bbox_inst, thres=cur_threshold, proposal_type=proposal_type
+                    proposal_bbox_inst, thres=cur_threshold, iou_thres=iou_threshold,
+                    proposal_type=proposal_type
                 )
             else:
                 raise ValueError("Unkown pseudo label boxes methods")
@@ -399,7 +408,9 @@ class UBTeacherTrainer(DefaultTrainer):
 
             # input both strong and weak supervised data into model
             label_data_q.extend(label_data_k)
-            record_dict, _, _, _ = self.model(label_data_q, branch="supervised")
+            record_dict, _, _, _ = self.model(label_data_q,
+                                              pred_iou=self.with_iou,
+                                              branch="supervised")
 
             # weight losses
             loss_dict = {}
@@ -428,10 +439,13 @@ class UBTeacherTrainer(DefaultTrainer):
                     proposals_rpn_unsup_k,
                     proposals_roih_unsup_k,
                     _,
-                ) = self.model_teacher(unlabel_data_k, branch="unsup_data_weak")
+                ) = self.model_teacher(unlabel_data_k,
+                                       pred_iou=self.with_iou,
+                                       branch="unsup_data_weak")
 
             #  Pseudo-labeling
             cur_threshold = self.cfg.SEMISUPNET.BBOX_THRESHOLD
+            iou_threshold = self.cfg.SEMISUPNET.IOU_THRESHOLD
 
             joint_proposal_dict = {}
             joint_proposal_dict["proposals_rpn"] = proposals_rpn_unsup_k
@@ -439,12 +453,14 @@ class UBTeacherTrainer(DefaultTrainer):
                 pesudo_proposals_rpn_unsup_k,
                 nun_pseudo_bbox_rpn,
             ) = self.process_pseudo_label(
-                proposals_rpn_unsup_k, cur_threshold, "rpn", "thresholding"
+                proposals_rpn_unsup_k, cur_threshold,
+                "rpn", "thresholding", iou_threshold
             )
             joint_proposal_dict["proposals_pseudo_rpn"] = pesudo_proposals_rpn_unsup_k
             # Pseudo_labeling for ROI head (bbox location/objectness)
             pesudo_proposals_roih_unsup_k, _ = self.process_pseudo_label(
-                proposals_roih_unsup_k, cur_threshold, "roih", "thresholding"
+                proposals_roih_unsup_k, cur_threshold,
+                "roih", "thresholding", iou_threshold
             )
             joint_proposal_dict["proposals_pseudo_roih"] = pesudo_proposals_roih_unsup_k
 
@@ -463,11 +479,11 @@ class UBTeacherTrainer(DefaultTrainer):
             all_unlabel_data = unlabel_data_q
 
             record_all_label_data, _, _, _ = self.model(
-                all_label_data, branch="supervised"
+                all_label_data, pred_iou=self.with_iou, branch="supervised"
             )
             record_dict.update(record_all_label_data)
             record_all_unlabel_data, _, _, _ = self.model(
-                all_unlabel_data, branch="supervised"
+                all_unlabel_data, pred_iou=self.with_iou, branch="supervised"
             )
             new_record_all_unlabel_data = {}
             for key in record_all_unlabel_data.keys():
@@ -480,7 +496,13 @@ class UBTeacherTrainer(DefaultTrainer):
             loss_dict = {}
             for key in record_dict.keys():
                 if key[:4] == "loss":
-                    if key == "loss_rpn_loc_pseudo" or key == "loss_box_reg_pseudo":
+                    if (
+                        not self.with_iou
+                        and (
+                            key == "loss_rpn_loc_pseudo"
+                            or key == "loss_box_reg_pseudo"
+                        )
+                    ):
                         # pseudo bbox regression <- 0
                         loss_dict[key] = record_dict[key] * 0
                     elif key[-6:] == "pseudo":  # unsupervised loss

@@ -46,3 +46,13 @@ def add_ubteacher_config(cfg):
 
     _C.EMAMODEL = CN()
     _C.EMAMODEL.SUP_CONSIST = True
+
+
+def add_box_cnf_config(cfg):
+    """
+    Add config for semisupnet.
+    """
+    _C = cfg
+    _C.MODEL.ROI_HEADS.IOU_HEAD = False
+
+    _C.SEMISUPNET.IOU_THRESHOLD = 0.5
