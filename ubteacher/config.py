@@ -56,3 +56,4 @@ def add_box_cnf_config(cfg):
     _C.MODEL.ROI_HEADS.IOU_HEAD = False
 
     _C.SEMISUPNET.IOU_THRESHOLD = 0.5
+    _C.SEMISUPNET.CALC_PSEUDO_LOC_LOSS = False

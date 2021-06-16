@@ -241,6 +241,10 @@ class UBTeacherTrainer(DefaultTrainer):
         self.model_teacher = model_teacher
 
         self.with_iou = cfg.MODEL.ROI_HEADS.IOU_HEAD
+        self.calc_pseudo_loc_loss = cfg.SEMISUPNET.CALC_PSEUDO_LOC_LOSS
+        if self.with_iou:
+            assert self.calc_pseudo_loc_loss, \
+                "If use iou branch, cfg.SEMISUPNET.CALC_PSEUDO_LOC_LOSS needs to be True"
 
         # For training, wrap with DDP. But don't need this for inference.
         if comm.get_world_size() > 1:
@@ -501,7 +505,7 @@ class UBTeacherTrainer(DefaultTrainer):
             for key in record_dict.keys():
                 if key[:4] == "loss":
                     if (
-                        not self.with_iou
+                        not self.calc_pseudo_loc_loss
                         and (
                             key == "loss_rpn_loc_pseudo"
                             or key == "loss_box_reg_pseudo"
