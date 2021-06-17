@@ -25,6 +25,7 @@ class FastRCNNFocaltLossOutputLayers(FastRCNNOutputLayers):
             out_features = self.bbox_pred.out_features
             out_features //= box_dim
             self.iou_pred = nn.Linear(in_features, out_features)
+            self.iou_loss_fn = cfg.MODEL.ROI_HEADS.IOU_HEAD_LOSS
 
             # weight initialization
             nn.init.normal_(self.iou_pred.weight, std=0.01)
@@ -131,7 +132,18 @@ class FastRCNNFocaltLossOutputLayers(FastRCNNOutputLayers):
         iou_ids = tuple(range(iou_targets.size(0)))
         iou_targets = iou_targets[iou_ids, iou_ids]
 
-        loss_iou_reg = smooth_l1_loss(fg_pred_ious, iou_targets.detach(), beta=0, reduction="sum")
+        if self.iou_loss_fn == "L1Loss":
+            loss_iou_reg = smooth_l1_loss(
+                fg_pred_ious, iou_targets.detach(),
+                beta=0, reduction="sum"
+            )
+        elif self.iou_loss_fn == "BinaryCrossEntropy":
+            loss_iou_reg = F.binary_cross_entropy(
+                fg_pred_ious, iou_targets.detach(),
+                reduction="sum"
+            )
+        else:
+            raise NotImplementedError
 
         return loss_iou_reg / max(gt_classes.numel(), 1.0)
 
