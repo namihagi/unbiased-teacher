@@ -433,6 +433,9 @@ class UBTeacherTrainer(DefaultTrainer):
             ) % self.cfg.SEMISUPNET.TEACHER_UPDATE_ITER == 0:
                 self._update_teacher_model(keep_rate=self.cfg.SEMISUPNET.EMA_KEEP_RATE)
 
+            if self.iter + 1 in self.cfg.SEMISUPNET.TEACHER_REFINE_STEP:
+                self._sync_model()
+
             record_dict = {}
             #  generate the pseudo-label using teacher model
             # note that we do not convert to eval mode, as 1) there is no gradient computed in
@@ -597,6 +600,16 @@ class UBTeacherTrainer(DefaultTrainer):
             self.model_teacher.load_state_dict(rename_model_dict)
         else:
             self.model_teacher.load_state_dict(self.model.state_dict())
+
+    def _sync_model(self):
+        # Synchronizing student model with teacher model
+        if comm.get_world_size() > 1:
+            rename_model_dict = {
+                "module." + key: value for key, value in self.model_teacher.state_dict().items()
+            }
+            self.model.load_state_dict(rename_model_dict)
+        else:
+            self.model.load_state_dict(self.model.state_dict())
 
     @classmethod
     def build_test_loader(cls, cfg, dataset_name):

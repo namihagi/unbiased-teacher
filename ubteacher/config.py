@@ -58,3 +58,4 @@ def add_box_cnf_config(cfg):
 
     _C.SEMISUPNET.IOU_THRESHOLD = 0.5
     _C.SEMISUPNET.CALC_PSEUDO_LOC_LOSS = False
+    _C.SEMISUPNET.TEACHER_REFINE_STEP = ()
