@@ -6,8 +6,9 @@ from detectron2.modeling.meta_arch.rcnn import GeneralizedRCNN
 @META_ARCH_REGISTRY.register()
 class TwoStagePseudoLabGeneralizedRCNN(GeneralizedRCNN):
     def forward(
-        self, batched_inputs, pred_iou=False, branch="supervised",
-        given_proposals=None, val_mode=False
+        self, batched_inputs, branch="supervised",
+        given_proposals=None, val_mode=False,
+        pred_iou=False, weight_on_iou=False
     ):
         if (not self.training) and (not val_mode):
             return self.inference(batched_inputs)
@@ -24,13 +25,13 @@ class TwoStagePseudoLabGeneralizedRCNN(GeneralizedRCNN):
         if branch == "supervised":
             # Region proposal network
             proposals_rpn, proposal_losses = self.proposal_generator(
-                images, features, gt_instances
+                images, features, gt_instances, weight_on_iou=weight_on_iou
             )
 
             # # roi_head lower branch
             _, detector_losses = self.roi_heads(
-                images, features, proposals_rpn, gt_instances,
-                pred_iou=pred_iou, branch=branch
+                images, features, proposals_rpn, gt_instances, branch=branch,
+                pred_iou=pred_iou, weight_on_iou=weight_on_iou
             )
 
             losses = {}

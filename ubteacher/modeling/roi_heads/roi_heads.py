@@ -18,6 +18,9 @@ from ubteacher.modeling.roi_heads.fast_rcnn import FastRCNNFocaltLossOutputLayer
 import numpy as np
 from detectron2.modeling.poolers import ROIPooler
 
+from pprint import pprint
+import sys
+
 
 @ROI_HEADS_REGISTRY.register()
 class StandardROIHeadsPseudoLab(StandardROIHeads):
@@ -70,6 +73,7 @@ class StandardROIHeadsPseudoLab(StandardROIHeads):
         targets: Optional[List[Instances]] = None,
         compute_loss=True,
         pred_iou: bool = False,
+        weight_on_iou: bool = False,
         branch="",
         compute_val_loss=False,
     ) -> Tuple[List[Instances], Dict[str, torch.Tensor]]:
@@ -94,12 +98,15 @@ class StandardROIHeadsPseudoLab(StandardROIHeads):
 
         if (self.training and compute_loss) or compute_val_loss:
             losses, _ = self._forward_box(
-                features, proposals, compute_loss, compute_val_loss, pred_iou, branch
+                features, proposals, compute_loss,
+                compute_val_loss, pred_iou, branch,
+                weight_on_iou=weight_on_iou
             )
             return proposals, losses
         else:
             pred_instances, predictions = self._forward_box(
-                features, proposals, compute_loss, compute_val_loss, pred_iou, branch
+                features, proposals, compute_loss,
+                compute_val_loss, pred_iou, branch
             )
 
             return pred_instances, predictions
@@ -112,6 +119,7 @@ class StandardROIHeadsPseudoLab(StandardROIHeads):
         compute_val_loss: bool = False,
         pred_iou: bool = False,
         branch: str = "",
+        weight_on_iou: bool = False
     ) -> Union[Dict[str, torch.Tensor], List[Instances]]:
         features = [features[f] for f in self.box_in_features]
         box_features = self.box_pooler(features, [x.proposal_boxes for x in proposals])
@@ -122,7 +130,9 @@ class StandardROIHeadsPseudoLab(StandardROIHeads):
         if (
             self.training and compute_loss
         ) or compute_val_loss:  # apply if training loss or val loss
-            losses = self.box_predictor.losses(predictions, proposals, pred_iou=pred_iou)
+            losses = self.box_predictor.losses(predictions, proposals,
+                                               pred_iou=pred_iou,
+                                               weight_on_iou=weight_on_iou)
 
             if self.train_on_pred_boxes:
                 with torch.no_grad():

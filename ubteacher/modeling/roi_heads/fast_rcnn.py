@@ -6,7 +6,7 @@ from detectron2.layers import batched_nms, cat, nonzero_tuple
 from detectron2.modeling.roi_heads.fast_rcnn import (FastRCNNOutputLayers,
                                                      _log_classification_stats)
 from detectron2.structures import Boxes, Instances
-from fvcore.nn import smooth_l1_loss
+from fvcore.nn import giou_loss, smooth_l1_loss
 from torch import nn
 from torch.nn import functional as F
 from torchvision.ops import box_iou
@@ -44,7 +44,8 @@ class FastRCNNFocaltLossOutputLayers(FastRCNNOutputLayers):
         else:
             return scores, proposal_deltas
 
-    def losses(self, predictions, proposals, pred_iou=False):
+    def losses(self, predictions, proposals, pred_iou=False,
+               weight_on_iou=False):
         """
         Args:
             predictions: return values of :meth:`forward()`.
@@ -78,13 +79,34 @@ class FastRCNNFocaltLossOutputLayers(FastRCNNOutputLayers):
                 [(p.gt_boxes if p.has("gt_boxes") else p.proposal_boxes).tensor for p in proposals],
                 dim=0,
             )
+            if pred_iou and weight_on_iou:
+                gt_ious_list = []
+                for p in proposals:
+                    if p.has("gt_ious"):
+                        gt_ious_list.append(p.gt_ious)
+                    else:
+                        proposal_boxes = p.proposal_boxes.tensor
+                        n = proposal_boxes.size(0)
+                        new_gt_ious = torch.ones(
+                            size=(n,),
+                            dtype=proposal_boxes.dtype,
+                            device=proposal_boxes.device
+                        )
+                        gt_ious_list.append(new_gt_ious)
+
+                gt_ious = cat(gt_ious_list, dim=0)
+            else:
+                gt_ious = None
+
         else:
             proposal_boxes = gt_boxes = torch.empty((0, 4), device=proposal_deltas.device)
+            gt_ious = None
 
         losses = {
             "loss_cls": self.comput_focal_loss(scores, gt_classes, reduction="mean"),
             "loss_box_reg": self.box_reg_loss(
-                proposal_boxes, gt_boxes, proposal_deltas, gt_classes
+                proposal_boxes, gt_boxes, proposal_deltas, gt_classes,
+                weight_on_iou=weight_on_iou, gt_ious=gt_ious
             ),
         }
         if pred_iou:
@@ -106,6 +128,62 @@ class FastRCNNFocaltLossOutputLayers(FastRCNNOutputLayers):
         total_loss = total_loss / gt_classes.shape[0]
 
         return total_loss
+
+    def box_reg_loss(self, proposal_boxes, gt_boxes, pred_deltas, gt_classes,
+                     weight_on_iou=False, gt_ious=None):
+        """
+        Args:
+            All boxes are tensors with the same shape Rx(4 or 5).
+            gt_classes is a long tensor of shape R, the gt class label of each proposal.
+            R shall be the number of proposals.
+        """
+        if not weight_on_iou:
+            return super().box_reg_loss(proposal_boxes, gt_boxes, pred_deltas, gt_classes)
+
+        box_dim = proposal_boxes.shape[1]  # 4 or 5
+        # Regression loss is only computed for foreground proposals (those matched to a GT)
+        fg_inds = nonzero_tuple((gt_classes >= 0) & (gt_classes < self.num_classes))[0]
+        if pred_deltas.shape[1] == box_dim:  # cls-agnostic regression
+            fg_pred_deltas = pred_deltas[fg_inds]
+        else:
+            fg_pred_deltas = pred_deltas.view(-1, self.num_classes, box_dim)[
+                fg_inds, gt_classes[fg_inds]
+            ]
+
+        if self.box_reg_loss_type == "smooth_l1":
+            gt_pred_deltas = self.box2box_transform.get_deltas(
+                proposal_boxes[fg_inds],
+                gt_boxes[fg_inds],
+            )
+            loss_box_reg = smooth_l1_loss(
+                fg_pred_deltas, gt_pred_deltas, self.smooth_l1_beta, reduction="none"
+            )
+        elif self.box_reg_loss_type == "giou":
+            fg_pred_boxes = self.box2box_transform.apply_deltas(
+                fg_pred_deltas, proposal_boxes[fg_inds]
+            )
+            loss_box_reg = giou_loss(fg_pred_boxes, gt_boxes[fg_inds], reduction="none")
+        else:
+            raise ValueError(f"Invalid bbox reg loss type '{self.box_reg_loss_type}'")
+
+        if gt_ious is not None:
+            fg_gt_ious = gt_ious.unsqueeze(dim=-1)[fg_inds]
+            loss_box_reg = (loss_box_reg * fg_gt_ious).sum()
+        else:
+            loss_box_reg = loss_box_reg.sum()
+
+        # The reg loss is normalized using the total number of regions (R), not the number
+        # of foreground regions even though the box regression loss is only defined on
+        # foreground regions. Why? Because doing so gives equal training influence to
+        # each foreground example. To see how, consider two different minibatches:
+        #  (1) Contains a single foreground region
+        #  (2) Contains 100 foreground regions
+        # If we normalize by the number of foreground regions, the single example in
+        # minibatch (1) will be given 100 times as much influence as each foreground
+        # example in minibatch (2). Normalizing by the total number of regions, R,
+        # means that the single example in minibatch (1) and each of the 100 examples
+        # in minibatch (2) are given equal influence.
+        return loss_box_reg / max(gt_classes.numel(), 1.0)  # return 0 if empty
 
     def iou_reg_loss(self, proposal_boxes, gt_boxes, pred_deltas, gt_classes, pred_ious):
         box_dim = proposal_boxes.shape[1]  # 4 or 5

@@ -271,6 +271,10 @@ class UBTeacherTrainer(DefaultTrainer):
         self.max_iter = cfg.SOLVER.MAX_ITER
         self.cfg = cfg
 
+        # about iou prediction
+        assert cfg.SEMISUPNET.IOU_FILTERING in ["thresholding", "weighting_loss"]
+        self.weight_on_iou = (cfg.SEMISUPNET.IOU_FILTERING == "weighting_loss")
+
         self.register_hooks(self.build_hooks())
 
     @classmethod
@@ -342,7 +346,7 @@ class UBTeacherTrainer(DefaultTrainer):
             ]
         elif proposal_type == "roih":
             valid_map = proposal_bbox_inst.scores > thres
-            if self.with_iou:
+            if self.with_iou and self.cfg.SEMISUPNET.IOU_FILTERING == "thresholding":
                 valid_map = valid_map & (proposal_bbox_inst.pred_ious > iou_thres)
 
             # create instances containing boxes and gt_classes
@@ -358,7 +362,7 @@ class UBTeacherTrainer(DefaultTrainer):
             new_proposal_inst.gt_classes = proposal_bbox_inst.pred_classes[valid_map]
             new_proposal_inst.scores = proposal_bbox_inst.scores[valid_map]
             if self.with_iou:
-                new_proposal_inst.ious = proposal_bbox_inst.pred_ious[valid_map]
+                new_proposal_inst.gt_ious = proposal_bbox_inst.pred_ious[valid_map]
 
         return new_proposal_inst
 
@@ -413,8 +417,8 @@ class UBTeacherTrainer(DefaultTrainer):
             # input both strong and weak supervised data into model
             label_data_q.extend(label_data_k)
             record_dict, _, _, _ = self.model(label_data_q,
-                                              pred_iou=self.with_iou,
-                                              branch="supervised")
+                                              branch="supervised",
+                                              pred_iou=self.with_iou)
 
             # weight losses
             loss_dict = {}
@@ -447,8 +451,8 @@ class UBTeacherTrainer(DefaultTrainer):
                     proposals_roih_unsup_k,
                     _,
                 ) = self.model_teacher(unlabel_data_k,
-                                       pred_iou=self.with_iou,
-                                       branch="unsup_data_weak")
+                                       branch="unsup_data_weak",
+                                       pred_iou=self.with_iou)
 
             #  Pseudo-labeling
             cur_threshold = self.cfg.SEMISUPNET.BBOX_THRESHOLD
@@ -490,11 +494,16 @@ class UBTeacherTrainer(DefaultTrainer):
             all_unlabel_data = unlabel_data_q
 
             record_all_label_data, _, _, _ = self.model(
-                all_label_data, pred_iou=self.with_iou, branch="supervised"
+                all_label_data,
+                branch="supervised",
+                pred_iou=self.with_iou
             )
             record_dict.update(record_all_label_data)
             record_all_unlabel_data, _, _, _ = self.model(
-                all_unlabel_data, pred_iou=self.with_iou, branch="supervised"
+                all_unlabel_data,
+                branch="supervised",
+                pred_iou=self.with_iou,
+                weight_on_iou=self.weight_on_iou
             )
             new_record_all_unlabel_data = {}
             for key in record_all_unlabel_data.keys():
