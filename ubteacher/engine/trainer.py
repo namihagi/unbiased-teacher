@@ -274,6 +274,10 @@ class UBTeacherTrainer(DefaultTrainer):
         # about iou prediction
         assert cfg.SEMISUPNET.IOU_FILTERING in ["thresholding", "weighting_loss"]
         self.weight_on_iou = (cfg.SEMISUPNET.IOU_FILTERING == "weighting_loss")
+        if cfg.MODEL.ROI_BOX_HEAD.BBOX_PSUEDO_REG_LOSS_TYPE == "robust_loss":
+            assert self.weight_on_iou, \
+                "when MODEL.ROI_BOX_HEAD.BBOX_PSUEDO_REG_LOSS_TYPE is 'robust_loss', " \
+                "IOU_FILTERING need to be 'weighting_loss'."
 
         self.register_hooks(self.build_hooks())
 

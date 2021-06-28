@@ -26,6 +26,8 @@ class FastRCNNFocaltLossOutputLayers(FastRCNNOutputLayers):
             out_features //= box_dim
             self.iou_pred = nn.Linear(in_features, out_features)
             self.iou_loss_fn = cfg.MODEL.ROI_HEADS.IOU_HEAD_LOSS
+            self.bbox_psuedo_reg_loss_type = cfg.MODEL.ROI_BOX_HEAD.BBOX_PSUEDO_REG_LOSS_TYPE
+            self.robust_func_c = cfg.MODEL.ROI_BOX_HEAD.ROBUST_FUNC_C
 
             # weight initialization
             nn.init.normal_(self.iou_pred.weight, std=0.01)
@@ -151,7 +153,7 @@ class FastRCNNFocaltLossOutputLayers(FastRCNNOutputLayers):
                 fg_inds, gt_classes[fg_inds]
             ]
 
-        if self.box_reg_loss_type == "smooth_l1":
+        if self.bbox_psuedo_reg_loss_type == "smooth_l1":
             gt_pred_deltas = self.box2box_transform.get_deltas(
                 proposal_boxes[fg_inds],
                 gt_boxes[fg_inds],
@@ -159,15 +161,28 @@ class FastRCNNFocaltLossOutputLayers(FastRCNNOutputLayers):
             loss_box_reg = smooth_l1_loss(
                 fg_pred_deltas, gt_pred_deltas, self.smooth_l1_beta, reduction="none"
             )
-        elif self.box_reg_loss_type == "giou":
+        elif self.bbox_psuedo_reg_loss_type == "giou":
             fg_pred_boxes = self.box2box_transform.apply_deltas(
                 fg_pred_deltas, proposal_boxes[fg_inds]
             )
             loss_box_reg = giou_loss(fg_pred_boxes, gt_boxes[fg_inds], reduction="none")
+        elif gt_ious is not None and self.bbox_psuedo_reg_loss_type == "robust_loss":
+            print("calculate robust_loss")
+            gt_pred_deltas = self.box2box_transform.get_deltas(
+                proposal_boxes[fg_inds],
+                gt_boxes[fg_inds],
+            )
+            loss_box_reg = robust_loss(
+                fg_pred_deltas,
+                gt_pred_deltas,
+                gt_ious.unsqueeze(dim=-1)[fg_inds],
+                self.robust_func_c,
+                reduction="none"
+            )
         else:
             raise ValueError(f"Invalid bbox reg loss type '{self.box_reg_loss_type}'")
 
-        if gt_ious is not None:
+        if gt_ious is not None and self.box_reg_loss_type != "robust_func":
             fg_gt_ious = gt_ious.unsqueeze(dim=-1)[fg_inds]
             loss_box_reg = (loss_box_reg * fg_gt_ious).sum()
         else:
@@ -388,3 +403,65 @@ def fast_rcnn_inference_single_image_with_iou(
     result.pred_ious = ious
     result.pred_classes = filter_inds[:, 1]
     return result, filter_inds[:, 0]
+
+
+def robust_loss(
+    fg_pred_deltas: torch.Tensor,
+    gt_pred_deltas: torch.Tensor,
+    gt_ious: torch.Tensor,
+    param_c: float,
+    reduction: str = "none"
+) -> torch.Tensor:
+    """
+    general robust loss defined in the paper "A General and Adaptive Robust Loss Function"
+
+    Args:
+        fg_pred_deltas (Tensor): input tensor of any shape
+        gt_pred_deltas (Tensor): target value tensor with the same shape as input
+        gt_ious (Tensor): IoU about gt_pred_deltas from teacher_model
+        param_c (float): a scale parameter of robust loss
+        reduction: 'none' | 'mean' | 'sum'
+                 'none': No reduction will be applied to the output.
+                 'mean': The output will be averaged.
+                 'sum': The output will be summed.
+
+    Returns:
+        The loss with the reduction option applied.
+    """
+    x = fg_pred_deltas - gt_pred_deltas
+    alpha = torch.log(gt_ious) + 1.0
+
+    # loss for alpha (-Inf, 1] except 0
+    abs_alpha_minus_2 = torch.abs(alpha - 2.0)
+    inner_func = (torch.pow(x / param_c, 2.0) / abs_alpha_minus_2) + 1.0
+    loss_otherwise = (abs_alpha_minus_2 / alpha) * (
+        torch.pow(inner_func, alpha / 2.0) - 1.0
+    )
+
+    # loss for alpha 0
+    loss_0 = torch.log(
+        0.5 * torch.pow(x / param_c, 2.0) + 1.0
+    )
+
+    # loss for alpha -Inf
+    loss_minus_Inf = 1.0 - torch.exp(
+        -0.5 * torch.pow(x / param_c, 2.0)
+    )
+
+    # aggregating loss
+    loss = torch.where(
+        alpha == -float("Inf"),
+        loss_minus_Inf,
+        loss_otherwise
+    )
+    loss = torch.where(
+        alpha == 0.0,
+        loss_0,
+        loss
+    )
+
+    if reduction == "mean":
+        loss = loss.mean() if loss.numel() > 0 else 0.0 * loss.sum()
+    elif reduction == "sum":
+        loss = loss.sum()
+    return loss
