@@ -85,12 +85,13 @@ class FastRCNNFocaltLossOutputLayers(FastRCNNOutputLayers):
                     if p.has("gt_ious"):
                         gt_ious_list.append(p.gt_ious)
                     else:
-                        proposal_boxes = p.proposal_boxes.tensor
+                        dtype = p.proposal_boxes.tensor.dtype
+                        device = p.proposal_boxes.tensor.device
                         n = proposal_boxes.size(0)
                         new_gt_ious = torch.ones(
                             size=(n,),
-                            dtype=proposal_boxes.dtype,
-                            device=proposal_boxes.device
+                            dtype=dtype,
+                            device=device
                         )
                         gt_ious_list.append(new_gt_ious)
 
