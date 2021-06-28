@@ -167,7 +167,6 @@ class FastRCNNFocaltLossOutputLayers(FastRCNNOutputLayers):
             )
             loss_box_reg = giou_loss(fg_pred_boxes, gt_boxes[fg_inds], reduction="none")
         elif gt_ious is not None and self.bbox_psuedo_reg_loss_type == "robust_loss":
-            print("calculate robust_loss")
             gt_pred_deltas = self.box2box_transform.get_deltas(
                 proposal_boxes[fg_inds],
                 gt_boxes[fg_inds],
@@ -180,9 +179,9 @@ class FastRCNNFocaltLossOutputLayers(FastRCNNOutputLayers):
                 reduction="none"
             )
         else:
-            raise ValueError(f"Invalid bbox reg loss type '{self.box_reg_loss_type}'")
+            raise ValueError(f"Invalid bbox reg loss type '{self.bbox_psuedo_reg_loss_type}'")
 
-        if gt_ious is not None and self.box_reg_loss_type != "robust_func":
+        if gt_ious is not None and self.bbox_psuedo_reg_loss_type != "robust_loss":
             fg_gt_ious = gt_ious.unsqueeze(dim=-1)[fg_inds]
             loss_box_reg = (loss_box_reg * fg_gt_ious).sum()
         else:
