@@ -548,8 +548,8 @@ class UBTeacherTrainer(DefaultTrainer):
                         loss_dict[key] = record_dict[key] * 1
 
             losses = sum(loss_dict.values())
+            record_dict.update(record_dict_weighted)
 
-        record_dict.update(record_dict_weighted)
         metrics_dict = record_dict
         metrics_dict["data_time"] = data_time
         self._write_metrics(metrics_dict)
