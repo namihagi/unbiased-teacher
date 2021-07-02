@@ -242,6 +242,7 @@ class UBTeacherTrainer(DefaultTrainer):
 
         self.with_iou = cfg.MODEL.ROI_HEADS.IOU_HEAD
         self.calc_pseudo_loc_loss = cfg.SEMISUPNET.CALC_PSEUDO_LOC_LOSS
+        self.calc_pseudo_iou_loss = cfg.SEMISUPNET.CALC_PSEUDO_IOU_LOSS
         if self.with_iou:
             assert self.calc_pseudo_loc_loss, \
                 "If use iou branch, cfg.SEMISUPNET.CALC_PSEUDO_LOC_LOSS needs to be True"
@@ -518,6 +519,7 @@ class UBTeacherTrainer(DefaultTrainer):
 
             # weight losses
             loss_dict = {}
+            record_dict_weighted = {}
             for key in record_dict.keys():
                 if key[:4] == "loss":
                     if (
@@ -529,15 +531,25 @@ class UBTeacherTrainer(DefaultTrainer):
                     ):
                         # pseudo bbox regression <- 0
                         loss_dict[key] = record_dict[key] * 0
+                        record_dict_weighted[key + "_weighted"] = loss_dict[key]
+                    elif (
+                        not self.calc_pseudo_iou_loss
+                        and (key == "loss_iou_pseudo")
+                    ):
+                        # pseudo iou prediction <- 0
+                        loss_dict[key] = record_dict[key] * 0
+                        record_dict_weighted[key + "_weighted"] = loss_dict[key]
                     elif key[-6:] == "pseudo":  # unsupervised loss
                         loss_dict[key] = (
                             record_dict[key] * self.cfg.SEMISUPNET.UNSUP_LOSS_WEIGHT
                         )
+                        record_dict_weighted[key + "_weighted"] = loss_dict[key]
                     else:  # supervised loss
                         loss_dict[key] = record_dict[key] * 1
 
             losses = sum(loss_dict.values())
 
+        record_dict.update(record_dict_weighted)
         metrics_dict = record_dict
         metrics_dict["data_time"] = data_time
         self._write_metrics(metrics_dict)
