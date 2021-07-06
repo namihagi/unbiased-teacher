@@ -746,6 +746,7 @@ class UBTeacherTrainer(DefaultTrainer):
         with_iou = cfg.MODEL.ROI_HEADS.IOU_HEAD
         cur_threshold = cfg.SEMISUPNET.BBOX_THRESHOLD
         iou_threshold = cfg.SEMISUPNET.IOU_THRESHOLD
+        iou_filtering = cfg.SEMISUPNET.IOU_FILTERING
 
         logger = logging.getLogger(__name__)
 
@@ -763,7 +764,8 @@ class UBTeacherTrainer(DefaultTrainer):
 
         results = inference_on_dataset_for_pseudo_label(
             model, eval_data_loader, evaluator, with_iou=with_iou,
-            cur_threshold=cur_threshold, iou_threshold=iou_threshold
+            cur_threshold=cur_threshold,
+            iou_filtering=iou_filtering, iou_threshold=iou_threshold
         )
 
         if comm.is_main_process():
