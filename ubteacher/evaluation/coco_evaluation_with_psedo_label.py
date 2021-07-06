@@ -102,11 +102,7 @@ class COCOEvaluatorWithPseudoLabel(DatasetEvaluator):
 
             self._matching.append(matching)
 
-    def evaluate(self, img_ids=None):
-        """
-        Args:
-            img_ids: a list of image IDs to evaluate on. Default to None for the whole dataset
-        """
+    def evaluate(self):
         if self._distributed:
             comm.synchronize()
             matching = comm.gather(self._matching, dst=0)
@@ -134,6 +130,34 @@ class COCOEvaluatorWithPseudoLabel(DatasetEvaluator):
             file_path = os.path.join(self._output_dir, f"pseudo_label_at_{self._ckpt_iter}.pth")
             with PathManager.open(file_path, "wb") as f:
                 torch.save(matching, f)
+            # save results
+            file_path = os.path.join(self._output_dir, f"results_at_{self._ckpt_iter}.pth")
+            with PathManager.open(file_path, "wb") as f:
+                torch.save(self._results, f)
+
+        # Copy so the caller can do whatever with results
+        return copy.deepcopy(self._results)
+
+    def evaluate_from_matching_pth(self):
+        if self._distributed:
+            comm.synchronize()
+            if not comm.is_main_process():
+                return {}
+
+        # load matching
+        file_path = os.path.join(self._output_dir, f"pseudo_label_at_{self._ckpt_iter}.pth")
+        self._logger.info(f"Loading matching from {file_path}...")
+        matching = torch.load(file_path)
+
+        self._results = OrderedDict()
+        device = self._get_device_from_matching(matching)
+        self._eval_matching_cls_agnostic(matching, device, base="gt")
+        self._eval_matching_cls_agnostic(matching, device, base="pseudo")
+        self._eval_matching_cls_specific(matching, device, base="gt")
+        self._eval_matching_cls_specific(matching, device, base="pseudo")
+
+        if self._output_dir:
+            PathManager.mkdirs(self._output_dir)
             # save results
             file_path = os.path.join(self._output_dir, f"results_at_{self._ckpt_iter}.pth")
             with PathManager.open(file_path, "wb") as f:
@@ -175,7 +199,12 @@ class COCOEvaluatorWithPseudoLabel(DatasetEvaluator):
         for matching in matching_dict:
             num_gt_per_img = matching["num_gt_boxes"]
             num_pseudo_per_img = matching["num_pseudo_boxes"]
-            num_gt += num_gt_per_img
+            if base == "gt":
+                num_gt += num_gt_per_img
+            elif base == "pseudo":
+                num_gt += num_pseudo_per_img
+            else:
+                raise NotImplementedError
 
             if num_gt_per_img and num_pseudo_per_img:
                 matching_labels_on_gt = matching[f"matching_labels_on_{base}"]
@@ -241,7 +270,7 @@ class COCOEvaluatorWithPseudoLabel(DatasetEvaluator):
 
         for matching in matching_dict:
 
-            for cls_idx, matching_per_cls in matching["matching_on_gt"].items():
+            for cls_idx, matching_per_cls in matching[f"matching_on_{base}"].items():
                 result[cls_idx]["num_gt_per_cls"] += matching_per_cls["num_gt_per_cls"]
 
                 for iou in matching_per_cls["ious_of_matched_pairs"]:

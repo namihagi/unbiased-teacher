@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
+import os
 
 import detectron2.utils.comm as comm
 from detectron2.checkpoint import DetectionCheckpointer
@@ -17,6 +18,7 @@ import ubteacher.data.datasets.builtin
 
 from ubteacher.modeling.meta_arch.ts_ensemble import EnsembleTSModel
 from ubteacher.engine.defaults import ubteacher_default_setup
+from ubteacher.evaluation.coco_evaluation_with_psedo_label import COCOEvaluatorWithPseudoLabel
 
 
 def setup(args):
@@ -45,23 +47,35 @@ def main(args):
 
     if args.eval_only:
         if cfg.SEMISUPNET.Trainer == "ubteacher":
-            model = Trainer.build_model(cfg)
-            model_teacher = Trainer.build_model(cfg)
-            ensem_ts_model = EnsembleTSModel(model_teacher, model)
+            if cfg.SEMISUPNET.LOAD_MATCHING_PTH:
+                assert cfg.SEMISUPNET.EVAL_PSEUDO_LABEL
 
-            DetectionCheckpointer(
-                ensem_ts_model, save_dir=cfg.OUTPUT_DIR
-            ).resume_or_load(cfg.MODEL.WEIGHTS, resume=args.resume)
-            if cfg.SEMISUPNET.EVAL_PSEUDO_LABEL:
-                res = Trainer.test_psuedo_label(
-                    cfg,
-                    ensem_ts_model.modelTeacher
+                # build Evaluator
+                output_folder = os.path.join(cfg.OUTPUT_DIR, "inference_psedo_label")
+                evaluator = COCOEvaluatorWithPseudoLabel(
+                    distributed=True,
+                    output_dir=output_folder,
+                    ckpt_iter=cfg.SEMISUPNET.EVAL_CKPT_ITERATION
                 )
+                res = evaluator.evaluate_from_matching_pth()
             else:
-                res = Trainer.test(
-                    cfg,
-                    ensem_ts_model.modelTeacher
-                )
+                model = Trainer.build_model(cfg)
+                model_teacher = Trainer.build_model(cfg)
+                ensem_ts_model = EnsembleTSModel(model_teacher, model)
+
+                DetectionCheckpointer(
+                    ensem_ts_model, save_dir=cfg.OUTPUT_DIR
+                ).resume_or_load(cfg.MODEL.WEIGHTS, resume=args.resume)
+                if cfg.SEMISUPNET.EVAL_PSEUDO_LABEL:
+                    res = Trainer.test_psuedo_label(
+                        cfg,
+                        ensem_ts_model.modelTeacher
+                    )
+                else:
+                    res = Trainer.test(
+                        cfg,
+                        ensem_ts_model.modelTeacher
+                    )
 
         else:
             model = Trainer.build_model(cfg)
