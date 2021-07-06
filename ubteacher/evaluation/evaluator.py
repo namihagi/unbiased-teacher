@@ -94,9 +94,6 @@ def inference_on_dataset_for_pseudo_label(
                     )
                 start_data_time = time.perf_counter()
 
-                if idx == 5:
-                    break
-
     # Measure the time only for this worker (before the synchronization barrier)
     total_time = time.perf_counter() - start_time
     total_time_str = str(datetime.timedelta(seconds=total_time))
