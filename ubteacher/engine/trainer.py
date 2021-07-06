@@ -18,9 +18,11 @@ from detectron2.data.dataset_mapper import DatasetMapper
 from detectron2.engine import hooks
 from detectron2.structures.boxes import Boxes
 from detectron2.structures.instances import Instances
+from detectron2.utils.logger import setup_logger
 
 from ubteacher.data.build import (
     build_detection_semisup_train_loader,
+    build_detection_test_loader_with_train_mode,
     build_detection_test_loader,
     build_detection_semisup_train_loader_two_crops,
 )
@@ -29,6 +31,9 @@ from ubteacher.engine.hooks import LossEvalHook
 from ubteacher.modeling.meta_arch.ts_ensemble import EnsembleTSModel
 from ubteacher.checkpoint.detection_checkpoint import DetectionTSCheckpointer
 from ubteacher.solver.build import build_lr_scheduler
+from ubteacher.evaluation.coco_evaluation_with_psedo_label import COCOEvaluatorWithPseudoLabel
+from ubteacher.evaluation.evaluator import inference_on_dataset_for_pseudo_label
+from ubteacher.evaluation.testing import print_matching_results
 
 
 # Supervised-only Trainer
@@ -229,6 +234,10 @@ class UBTeacherTrainer(DefaultTrainer):
         Use the custom checkpointer, which loads other backbone models
         with matching heuristics.
         """
+        logger = logging.getLogger("ubteacher")
+        if not logger.isEnabledFor(logging.INFO):  # setup_logger is not called for d2
+            setup_logger(name="ubteacher")
+
         cfg = DefaultTrainer.auto_scale_workers(cfg, comm.get_world_size())
         data_loader = self.build_train_loader(cfg)
 
@@ -640,6 +649,10 @@ class UBTeacherTrainer(DefaultTrainer):
     def build_test_loader(cls, cfg, dataset_name):
         return build_detection_test_loader(cfg, dataset_name)
 
+    @classmethod
+    def build_test_loader_with_train_mode(cls, cfg):
+        return build_detection_test_loader_with_train_mode(cfg)
+
     def build_hooks(self):
         cfg = self.cfg.clone()
         cfg.defrost()
@@ -719,3 +732,42 @@ class UBTeacherTrainer(DefaultTrainer):
             # run writers in the end, so that evaluation metrics are written
             ret.append(hooks.PeriodicWriter(self.build_writers(), period=20))
         return ret
+
+    @classmethod
+    def test_psuedo_label(cls, cfg, model):
+        """
+        Args:
+            cfg (CfgNode):
+            model (nn.Module):
+
+        Returns:
+            dict: a dict of result metrics
+        """
+        with_iou = cfg.MODEL.ROI_HEADS.IOU_HEAD
+        cur_threshold = cfg.SEMISUPNET.BBOX_THRESHOLD
+        iou_threshold = cfg.SEMISUPNET.IOU_THRESHOLD
+
+        logger = logging.getLogger(__name__)
+
+        results = OrderedDict()
+        dataset_name = cfg.DATASETS.TEST[0]
+        eval_data_loader = cls.build_test_loader_with_train_mode(cfg)
+
+        # build Evaluator
+        output_folder = os.path.join(cfg.OUTPUT_DIR, "inference_psedo_label")
+        evaluator = COCOEvaluatorWithPseudoLabel(
+            distributed=True,
+            output_dir=output_folder,
+            ckpt_iter=cfg.SEMISUPNET.EVAL_CKPT_ITERATION
+        )
+
+        results = inference_on_dataset_for_pseudo_label(
+            model, eval_data_loader, evaluator, with_iou=with_iou,
+            cur_threshold=cur_threshold, iou_threshold=iou_threshold
+        )
+
+        if comm.is_main_process():
+            logger.info("Evaluation results for {} in csv format:".format(dataset_name))
+            print_matching_results(results)
+
+        return results

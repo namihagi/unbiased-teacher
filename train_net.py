@@ -16,6 +16,7 @@ from ubteacher.modeling.roi_heads.roi_heads import StandardROIHeadsPseudoLab
 import ubteacher.data.datasets.builtin
 
 from ubteacher.modeling.meta_arch.ts_ensemble import EnsembleTSModel
+from ubteacher.engine.defaults import ubteacher_default_setup
 
 
 def setup(args):
@@ -29,6 +30,7 @@ def setup(args):
     cfg.merge_from_list(args.opts)
     cfg.freeze()
     default_setup(cfg, args)
+    ubteacher_default_setup(cfg)
     return cfg
 
 
@@ -50,7 +52,16 @@ def main(args):
             DetectionCheckpointer(
                 ensem_ts_model, save_dir=cfg.OUTPUT_DIR
             ).resume_or_load(cfg.MODEL.WEIGHTS, resume=args.resume)
-            res = Trainer.test(cfg, ensem_ts_model.modelTeacher)
+            if cfg.SEMISUPNET.EVAL_PSEUDO_LABEL:
+                res = Trainer.test_psuedo_label(
+                    cfg,
+                    ensem_ts_model.modelTeacher
+                )
+            else:
+                res = Trainer.test(
+                    cfg,
+                    ensem_ts_model.modelTeacher
+                )
 
         else:
             model = Trainer.build_model(cfg)
