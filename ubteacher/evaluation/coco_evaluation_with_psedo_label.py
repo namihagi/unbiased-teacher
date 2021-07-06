@@ -74,25 +74,6 @@ class COCOEvaluatorWithPseudoLabel(DatasetEvaluator):
         self._cpu_device = torch.device("cpu")
 
         self._metadata = MetadataCatalog.get("coco_2017_train")
-        # if not hasattr(self._metadata, "json_file"):
-        #     self._logger.info(
-        #         f"'{dataset_name}' is not registered by `register_coco_instances`."
-        #         " Therefore trying to convert it to COCO format ..."
-        #     )
-
-        #     cache_path = os.path.join(output_dir, f"{dataset_name}_coco_format.json")
-        #     self._metadata.json_file = cache_path
-        #     convert_to_coco_json(dataset_name, cache_path)
-
-        # json_file = PathManager.get_local_path(self._metadata.json_file)
-        # with contextlib.redirect_stdout(io.StringIO()):
-        #     self._coco_api = COCO(json_file)
-
-        # # Test set json files do not contain annotations (evaluation must be
-        # # performed using the COCO evaluation server).
-        # self._do_evaluation = "annotations" in self._coco_api.dataset
-        # if self._do_evaluation:
-        #     self._kpt_oks_sigmas = kpt_oks_sigmas
 
     def reset(self):
         self._matching = []
@@ -142,8 +123,10 @@ class COCOEvaluatorWithPseudoLabel(DatasetEvaluator):
 
         self._results = OrderedDict()
         device = self._get_device_from_matching(matching)
-        self._eval_matching_cls_agnostic(matching, device)
-        self._eval_matching_cls_specific(matching, device)
+        self._eval_matching_cls_agnostic(matching, device, base="gt")
+        self._eval_matching_cls_agnostic(matching, device, base="pseudo")
+        self._eval_matching_cls_specific(matching, device, base="gt")
+        self._eval_matching_cls_specific(matching, device, base="pseudo")
 
         if self._output_dir:
             PathManager.mkdirs(self._output_dir)
@@ -171,11 +154,18 @@ class COCOEvaluatorWithPseudoLabel(DatasetEvaluator):
             device = self._cpu_device
         return device
 
-    def _eval_matching_cls_agnostic(self, matching_dict, device):
+    def _eval_matching_cls_agnostic(self, matching_dict, device, base="gt"):
         """
         Evaluate matching labels between pseudo-label and related gt.
         """
         self._logger.info("Evaluating matching of class label on pseudo boxes...")
+
+        if base == "gt":
+            metric = "recall"
+        elif base == "pseudo":
+            metric = "precision"
+        else:
+            raise NotImplementedError
 
         num_gt = 0
         iou_dist_of_matched_boxes = torch.zeros(10, dtype=torch.int64, device=device)
@@ -188,7 +178,7 @@ class COCOEvaluatorWithPseudoLabel(DatasetEvaluator):
             num_gt += num_gt_per_img
 
             if num_gt_per_img and num_pseudo_per_img:
-                matching_labels_on_gt = matching["matching_labels_on_gt"]
+                matching_labels_on_gt = matching[f"matching_labels_on_{base}"]
                 ious_of_matched_pairs = matching_labels_on_gt["ious_of_matched_pairs"]
                 matched_gt_labels = matching_labels_on_gt["matched_gt_labels"]
                 matched_pseudo_labels = matching_labels_on_gt["matched_pseudo_labels"]
@@ -215,19 +205,27 @@ class COCOEvaluatorWithPseudoLabel(DatasetEvaluator):
             recall_of_pseudo_boxes_and_cls = \
                 torch.zeros_like(iou_dist_of_matched_boxes_and_cls)
 
-        self._results["matching_cls_agnostic"] = {
+        self._results[f"matching_cls_agnostic_on_{base}"] = {
             "num_gt": num_gt,
             "iou_dist_of_matched_boxes": iou_dist_of_matched_boxes,
             "iou_dist_of_matched_boxes_and_cls": iou_dist_of_matched_boxes_and_cls,
-            "recall_of_pseudo_boxes": recall_of_pseudo_boxes,
-            "recall_of_pseudo_boxes_and_cls": recall_of_pseudo_boxes_and_cls
+            f"{metric}_of_pseudo_boxes": recall_of_pseudo_boxes,
+            f"{metric}_of_pseudo_boxes_and_cls": recall_of_pseudo_boxes_and_cls
         }
 
-    def _eval_matching_cls_specific(self, matching_dict, device):
+    def _eval_matching_cls_specific(self, matching_dict, device, base="gt"):
         """
         Evaluate pseudo-label at specific class.
         """
         self._logger.info("Evaluating iou dist based on gt...")
+
+        if base == "gt":
+            metric = "recall"
+        elif base == "pseudo":
+            metric = "precision"
+        else:
+            raise NotImplementedError
+
         class_names = self._metadata.thing_classes
         num_classes = len(self._metadata.thing_classes)
 
@@ -264,6 +262,6 @@ class COCOEvaluatorWithPseudoLabel(DatasetEvaluator):
                     torch.zeros_like(iou_dist_of_matched_boxes)
 
             result[i]["iou_dist_of_matched_boxes"] = iou_dist_of_matched_boxes
-            result[i]["recall_of_pseudo_boxes"] = recall_of_pseudo_boxes
+            result[i][f"{metric}_of_pseudo_boxes"] = recall_of_pseudo_boxes
 
-        self._results["matching_cls_specific"] = result
+        self._results[f"matching_cls_specific_on_{base}"] = result

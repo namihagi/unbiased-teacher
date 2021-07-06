@@ -22,9 +22,17 @@ def box_matching(
             gt_boxes, gt_classes,
             pseudo_boxes, pseudo_classes, pseudo_ious
         ),
+        "matching_on_pseudo": matching_based_on_gt(
+            pseudo_boxes, pseudo_classes,
+            gt_boxes, gt_classes,
+        ),
         "matching_labels_on_gt": matching_labels(
             gt_boxes, gt_classes,
             pseudo_boxes, pseudo_classes, pseudo_ious
+        ),
+        "matching_labels_on_pseudo": matching_labels(
+            pseudo_boxes, pseudo_classes,
+            gt_boxes, gt_classes,
         ),
     }
 
