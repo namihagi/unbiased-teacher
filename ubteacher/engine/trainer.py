@@ -374,7 +374,14 @@ class UBTeacherTrainer(DefaultTrainer):
             evaluator_list.append(COCOEvaluator(
                 dataset_name, output_dir=output_folder))
         elif evaluator_type == "pascal_voc":
-            return PascalVOCDetectionEvaluator(dataset_name)
+            if cfg.TEST.EVALUATOR == "COCOeval":
+                evaluator_list.append(
+                    COCOEvaluator(
+                        dataset_name,
+                        output_dir=output_folder)
+                )
+            else:
+                return PascalVOCDetectionEvaluator(dataset_name)
         if len(evaluator_list) == 0:
             raise NotImplementedError(
                 "no Evaluator for the dataset {} with the type {}".format(
@@ -638,8 +645,8 @@ class UBTeacherTrainer(DefaultTrainer):
                         record_dict_weighted[key + "_weighted"] = loss_dict[key]
                     elif key[-6:] == "pseudo":  # unsupervised loss
                         loss_dict[key] = (
-                            record_dict[key] *
-                            self.cfg.SEMISUPNET.UNSUP_LOSS_WEIGHT
+                            record_dict[key]
+                            * self.cfg.SEMISUPNET.UNSUP_LOSS_WEIGHT
                         )
                         record_dict_weighted[key + "_weighted"] = loss_dict[key]
                     else:  # supervised loss
@@ -707,8 +714,8 @@ class UBTeacherTrainer(DefaultTrainer):
         for key, value in self.model_teacher.state_dict().items():
             if key in student_model_dict.keys():
                 new_teacher_dict[key] = (
-                    student_model_dict[key] *
-                    (1 - keep_rate) + value * keep_rate
+                    student_model_dict[key]
+                    * (1 - keep_rate) + value * keep_rate
                 )
             else:
                 raise Exception("{} is not found in student model".format(key))
