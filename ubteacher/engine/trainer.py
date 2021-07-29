@@ -328,8 +328,10 @@ class UBTeacherTrainer(DefaultTrainer):
         self.cfg = cfg
 
         # about iou prediction
-        assert cfg.SEMISUPNET.IOU_FILTERING in ["thresholding", "weighting_loss"]
-        self.weight_on_iou = (cfg.SEMISUPNET.IOU_FILTERING == "weighting_loss")
+        assert (cfg.SEMISUPNET.IOU_FILTERING
+                in ["thresholding", "weighting_loss", "thres_and_weight"])
+        self.weight_on_iou = (cfg.SEMISUPNET.IOU_FILTERING
+                              in ["weighting_loss", "thres_and_weight"])
         if cfg.MODEL.ROI_BOX_HEAD.BBOX_PSUEDO_REG_LOSS_TYPE == "robust_loss":
             assert self.weight_on_iou, \
                 "when MODEL.ROI_BOX_HEAD.BBOX_PSUEDO_REG_LOSS_TYPE is 'robust_loss', " \
@@ -452,7 +454,10 @@ class UBTeacherTrainer(DefaultTrainer):
             ]
         elif proposal_type == "roih":
             valid_map = proposal_bbox_inst.scores > thres
-            if self.with_iou and self.cfg.SEMISUPNET.IOU_FILTERING == "thresholding":
+            if self.with_iou and (
+                self.cfg.SEMISUPNET.IOU_FILTERING
+                in ["thresholding", "thres_and_weight"]
+            ):
                 valid_map = valid_map & (proposal_bbox_inst.pred_ious > iou_thres)
 
             # create instances containing boxes and gt_classes
