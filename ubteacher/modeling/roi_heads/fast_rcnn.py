@@ -28,6 +28,7 @@ class FastRCNNFocaltLossOutputLayers(FastRCNNOutputLayers):
             self.iou_loss_fn = cfg.MODEL.ROI_HEADS.IOU_HEAD_LOSS
             self.bbox_psuedo_reg_loss_type = cfg.MODEL.ROI_BOX_HEAD.BBOX_PSUEDO_REG_LOSS_TYPE
             self.robust_func_c = cfg.MODEL.ROI_BOX_HEAD.ROBUST_FUNC_C
+            self.use_det_score = cfg.MODEL.ROI_BOX_HEAD.USE_DET_SCORE
 
             # weight initialization
             nn.init.normal_(self.iou_pred.weight, std=0.01)
@@ -258,6 +259,7 @@ class FastRCNNFocaltLossOutputLayers(FastRCNNOutputLayers):
                 self.test_score_thresh,
                 self.test_nms_thresh,
                 self.test_topk_per_image,
+                self.use_det_score,
             )
         else:
             return super().inference(predictions, proposals)
@@ -302,6 +304,7 @@ def fast_rcnn_inference_with_iou(
     score_thresh: float,
     nms_thresh: float,
     topk_per_image: int,
+    use_det_score: bool = False,
 ):
     """
     Call `fast_rcnn_inference_single_image` for all images.
@@ -333,7 +336,7 @@ def fast_rcnn_inference_with_iou(
     result_per_image = [
         fast_rcnn_inference_single_image_with_iou(
             boxes_per_image, scores_per_image, ious_per_image, image_shape,
-            score_thresh, nms_thresh, topk_per_image
+            score_thresh, nms_thresh, topk_per_image, use_det_score
         )
         for scores_per_image, boxes_per_image, ious_per_image, image_shape
         in zip(scores, boxes, ious, image_shapes)
@@ -349,6 +352,7 @@ def fast_rcnn_inference_single_image_with_iou(
     score_thresh: float,
     nms_thresh: float,
     topk_per_image: int,
+    use_det_score: bool = False,
 ):
     """
     Single-image inference. Return bounding-box detection results by thresholding
@@ -388,6 +392,10 @@ def fast_rcnn_inference_single_image_with_iou(
     scores = scores[filter_mask]
     ious = ious[filter_mask]
 
+    if use_det_score:
+        original_scores = scores
+        scores = scores * ious
+
     # 2. Apply NMS for each class independently.
     keep = batched_nms(boxes, scores, filter_inds[:, 1], nms_thresh)
     if topk_per_image >= 0:
@@ -398,7 +406,11 @@ def fast_rcnn_inference_single_image_with_iou(
 
     result = Instances(image_shape)
     result.pred_boxes = Boxes(boxes)
-    result.scores = scores
+    if use_det_score:
+        result.scores = original_scores[keep]
+        result.det_scores = scores
+    else:
+        result.scores = scores
     result.pred_ious = ious
     result.pred_classes = filter_inds[:, 1]
     return result, filter_inds[:, 0]

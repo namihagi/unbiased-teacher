@@ -532,8 +532,7 @@ class UBTeacherTrainer(DefaultTrainer):
             # input both strong and weak supervised data into model
             label_data_q.extend(label_data_k)
             record_dict, _, _, _ = self.model(label_data_q,
-                                              branch="supervised",
-                                              pred_iou=self.with_iou)
+                                              branch="supervised")
 
             # weight losses
             loss_dict = {}
@@ -567,8 +566,7 @@ class UBTeacherTrainer(DefaultTrainer):
                     proposals_roih_unsup_k,
                     _,
                 ) = self.model_teacher(unlabel_data_k,
-                                       branch="unsup_data_weak",
-                                       pred_iou=self.with_iou)
+                                       branch="unsup_data_weak")
 
             #  Pseudo-labeling
             cur_threshold = self.cfg.SEMISUPNET.BBOX_THRESHOLD
@@ -610,13 +608,11 @@ class UBTeacherTrainer(DefaultTrainer):
             record_all_label_data, _, _, _ = self.model(
                 all_label_data,
                 branch="supervised",
-                pred_iou=self.with_iou
             )
             record_dict.update(record_all_label_data)
             record_all_unlabel_data, _, _, _ = self.model(
                 all_unlabel_data,
                 branch="supervised",
-                pred_iou=self.with_iou,
                 weight_on_iou=self.weight_on_iou
             )
             new_record_all_unlabel_data = {}

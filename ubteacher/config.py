@@ -55,6 +55,7 @@ def add_box_cnf_config(cfg):
     _C = cfg
     _C.MODEL.ROI_HEADS.IOU_HEAD = False
     _C.MODEL.ROI_HEADS.IOU_HEAD_LOSS = "L1Loss"
+    _C.MODEL.ROI_BOX_HEAD.USE_DET_SCORE = False
 
     _C.MODEL.ROI_BOX_HEAD.BBOX_PSUEDO_REG_LOSS_TYPE = "smooth_l1"
     _C.MODEL.ROI_BOX_HEAD.ROBUST_FUNC_C = 1.0

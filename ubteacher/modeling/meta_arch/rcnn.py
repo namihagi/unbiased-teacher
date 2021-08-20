@@ -1,14 +1,21 @@
-# Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
+from typing import Dict, List, Optional
+
+import torch
 from detectron2.modeling.meta_arch.build import META_ARCH_REGISTRY
 from detectron2.modeling.meta_arch.rcnn import GeneralizedRCNN
+from detectron2.structures import Instances
 
 
 @META_ARCH_REGISTRY.register()
 class TwoStagePseudoLabGeneralizedRCNN(GeneralizedRCNN):
+    def __init__(self, cfg):
+        super(TwoStagePseudoLabGeneralizedRCNN, self).__init__(cfg)
+
+        self.pred_iou = cfg.MODEL.ROI_HEADS.IOU_HEAD
+
     def forward(
         self, batched_inputs, branch="supervised",
-        given_proposals=None, val_mode=False,
-        pred_iou=False, weight_on_iou=False
+        given_proposals=None, val_mode=False, weight_on_iou=False
     ):
         if (not self.training) and (not val_mode):
             return self.inference(batched_inputs)
@@ -31,7 +38,7 @@ class TwoStagePseudoLabGeneralizedRCNN(GeneralizedRCNN):
             # # roi_head lower branch
             _, detector_losses = self.roi_heads(
                 images, features, proposals_rpn, gt_instances, branch=branch,
-                pred_iou=pred_iou, weight_on_iou=weight_on_iou
+                pred_iou=self.pred_iou, weight_on_iou=weight_on_iou
             )
 
             losses = {}
@@ -45,14 +52,15 @@ class TwoStagePseudoLabGeneralizedRCNN(GeneralizedRCNN):
                 images, features, None, compute_loss=False
             )
 
-            # roi_head lower branch (keep this for further production)  # notice that we do not use any target in ROI head to do inference !
+            # roi_head lower branch (keep this for further production)
+            # notice that we do not use any target in ROI head to do inference !
             proposals_roih, ROI_predictions = self.roi_heads(
                 images,
                 features,
                 proposals_rpn,
                 targets=None,
                 compute_loss=False,
-                pred_iou=pred_iou,
+                pred_iou=self.pred_iou,
                 branch=branch,
             )
 
@@ -73,7 +81,7 @@ class TwoStagePseudoLabGeneralizedRCNN(GeneralizedRCNN):
                 gt_instances,
                 branch=branch,
                 compute_val_loss=True,
-                pred_iou=pred_iou
+                pred_iou=self.pred_iou
             )
 
             losses = {}
@@ -81,29 +89,41 @@ class TwoStagePseudoLabGeneralizedRCNN(GeneralizedRCNN):
             losses.update(proposal_losses)
             return losses, [], [], None
 
-    # def inference(self, batched_inputs, detected_instances=None, do_postprocess=True):
-    #     assert not self.training
+    def inference(
+        self,
+        batched_inputs: List[Dict[str, torch.Tensor]],
+        detected_instances: Optional[List[Instances]] = None,
+        do_postprocess: bool = True,
+    ):
+        if not self.pred_iou:
+            return super().inference(
+                batched_inputs,
+                detected_instances,
+                do_postprocess
+            )
 
-    #     images = self.preprocess_image(batched_inputs)
-    #     features = self.backbone(images.tensor)
+        assert not self.training
 
-    #     if detected_instances is None:
-    #         if self.proposal_generator:
-    #             proposals, _ = self.proposal_generator(images, features, None)
-    #         else:
-    #             assert "proposals" in batched_inputs[0]
-    #             proposals = [x["proposals"].to(self.device) for x in batched_inputs]
+        images = self.preprocess_image(batched_inputs)
+        features = self.backbone(images.tensor)
 
-    #         results, _ = self.roi_heads(images, features, proposals, None)
-    #     else:
-    #         detected_instances = [x.to(self.device) for x in detected_instances]
-    #         results = self.roi_heads.forward_with_given_boxes(
-    #             features, detected_instances
-    #         )
+        if detected_instances is None:
+            if self.proposal_generator is not None:
+                proposals, _ = self.proposal_generator(images, features, None)
+            else:
+                assert "proposals" in batched_inputs[0]
+                proposals = [x["proposals"].to(self.device) for x in batched_inputs]
 
-    #     if do_postprocess:
-    #         return GeneralizedRCNN._postprocess(
-    #             results, batched_inputs, images.image_sizes
-    #         )
-    #     else:
-    #         return results
+            results, _ = self.roi_heads(
+                images, features, proposals, None,
+                pred_iou=self.pred_iou
+            )
+        else:
+            detected_instances = [x.to(self.device) for x in detected_instances]
+            results = self.roi_heads.forward_with_given_boxes(features, detected_instances)
+
+        if do_postprocess:
+            assert not torch.jit.is_scripting(), "Scripting is not supported for postprocess."
+            return GeneralizedRCNN._postprocess(results, batched_inputs, images.image_sizes)
+        else:
+            return results
