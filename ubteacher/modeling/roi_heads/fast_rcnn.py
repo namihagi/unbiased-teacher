@@ -3,8 +3,10 @@ from typing import Dict, List, Tuple, Union
 
 import torch
 from detectron2.layers import batched_nms, cat, nonzero_tuple
-from detectron2.modeling.roi_heads.fast_rcnn import (FastRCNNOutputLayers,
-                                                     _log_classification_stats)
+from detectron2.modeling.roi_heads.fast_rcnn import (
+    FastRCNNOutputLayers,
+    _log_classification_stats,
+)
 from detectron2.structures import Boxes, Instances
 from fvcore.nn import giou_loss, smooth_l1_loss
 from torch import nn
@@ -13,7 +15,7 @@ from torchvision.ops import box_iou
 
 
 class FastRCNNFocaltLossOutputLayers(FastRCNNOutputLayers):
-    """apply FocalLoss for class score """
+    """apply FocalLoss for class score"""
 
     def __init__(self, cfg, input_shape):
         super(FastRCNNFocaltLossOutputLayers, self).__init__(cfg, input_shape)
@@ -47,8 +49,7 @@ class FastRCNNFocaltLossOutputLayers(FastRCNNOutputLayers):
         else:
             return scores, proposal_deltas
 
-    def losses(self, predictions, proposals, pred_iou=False,
-               weight_on_iou=False):
+    def losses(self, predictions, proposals, pred_iou=False, weight_on_iou=False):
         """
         Args:
             predictions: return values of :meth:`forward()`.
@@ -83,34 +84,32 @@ class FastRCNNFocaltLossOutputLayers(FastRCNNOutputLayers):
                 dim=0,
             )
             if pred_iou and weight_on_iou:
-                gt_ious_list = []
-                for p in proposals:
-                    if p.has("gt_ious"):
-                        gt_ious_list.append(p.gt_ious)
-                    else:
-                        dtype = p.proposal_boxes.tensor.dtype
-                        device = p.proposal_boxes.tensor.device
-                        n = proposal_boxes.size(0)
-                        new_gt_ious = torch.ones(
-                            size=(n,),
-                            dtype=dtype,
-                            device=device
-                        )
-                        gt_ious_list.append(new_gt_ious)
+                if self.use_det_score:
+                    weight_list = self.generate_loss_weight(
+                        proposals, proposal_boxes, name="det_scores"
+                    )
+                else:
+                    weight_list = self.generate_loss_weight(
+                        proposals, proposal_boxes, name="gt_ious"
+                    )
 
-                gt_ious = cat(gt_ious_list, dim=0)
+                weight_for_box_reg = cat(weight_list, dim=0)
             else:
-                gt_ious = None
+                weight_for_box_reg = None
 
         else:
             proposal_boxes = gt_boxes = torch.empty((0, 4), device=proposal_deltas.device)
-            gt_ious = None
+            weight_for_box_reg = None
 
         losses = {
             "loss_cls": self.comput_focal_loss(scores, gt_classes, reduction="mean"),
             "loss_box_reg": self.box_reg_loss(
-                proposal_boxes, gt_boxes, proposal_deltas, gt_classes,
-                weight_on_iou=weight_on_iou, gt_ious=gt_ious
+                proposal_boxes,
+                gt_boxes,
+                proposal_deltas,
+                gt_classes,
+                weight_on_iou=weight_on_iou,
+                weight_for_box_reg=weight_for_box_reg,
             ),
         }
         if pred_iou:
@@ -119,6 +118,19 @@ class FastRCNNFocaltLossOutputLayers(FastRCNNOutputLayers):
             )
 
         return {k: v * self.loss_weight.get(k, 1.0) for k, v in losses.items()}
+
+    def generate_loss_weight(self, proposals, proposal_boxes, name="gt_ious"):
+        weight_list = []
+        for p in proposals:
+            if p.has(name):
+                weight_list.append(p.get(name))
+            else:
+                dtype = p.proposal_boxes.tensor.dtype
+                device = p.proposal_boxes.tensor.device
+                n = proposal_boxes.size(0)
+                new_gt_ious = torch.ones(size=(n,), dtype=dtype, device=device)
+                weight_list.append(new_gt_ious)
+        return weight_list
 
     def comput_focal_loss(self, scores, gt_classes, reduction="mean"):
         if gt_classes.numel() == 0 and reduction == "mean":
@@ -133,8 +145,15 @@ class FastRCNNFocaltLossOutputLayers(FastRCNNOutputLayers):
 
         return total_loss
 
-    def box_reg_loss(self, proposal_boxes, gt_boxes, pred_deltas, gt_classes,
-                     weight_on_iou=False, gt_ious=None):
+    def box_reg_loss(
+        self,
+        proposal_boxes,
+        gt_boxes,
+        pred_deltas,
+        gt_classes,
+        weight_on_iou=False,
+        weight_for_box_reg=None,
+    ):
         """
         Args:
             All boxes are tensors with the same shape Rx(4 or 5).
@@ -160,14 +179,17 @@ class FastRCNNFocaltLossOutputLayers(FastRCNNOutputLayers):
                 gt_boxes[fg_inds],
             )
             loss_box_reg = smooth_l1_loss(
-                fg_pred_deltas, gt_pred_deltas, self.smooth_l1_beta, reduction="none"
+                fg_pred_deltas,
+                gt_pred_deltas,
+                self.smooth_l1_beta,
+                reduction="none",
             )
         elif self.bbox_psuedo_reg_loss_type == "giou":
             fg_pred_boxes = self.box2box_transform.apply_deltas(
                 fg_pred_deltas, proposal_boxes[fg_inds]
             )
             loss_box_reg = giou_loss(fg_pred_boxes, gt_boxes[fg_inds], reduction="none")
-        elif gt_ious is not None and self.bbox_psuedo_reg_loss_type == "robust_loss":
+        elif weight_for_box_reg is not None and self.bbox_psuedo_reg_loss_type == "robust_loss":
             gt_pred_deltas = self.box2box_transform.get_deltas(
                 proposal_boxes[fg_inds],
                 gt_boxes[fg_inds],
@@ -175,16 +197,16 @@ class FastRCNNFocaltLossOutputLayers(FastRCNNOutputLayers):
             loss_box_reg = robust_loss(
                 fg_pred_deltas,
                 gt_pred_deltas,
-                gt_ious.unsqueeze(dim=-1)[fg_inds],
+                weight_for_box_reg.unsqueeze(dim=-1)[fg_inds],
                 self.robust_func_c,
-                reduction="none"
+                reduction="none",
             )
         else:
             raise ValueError(f"Invalid bbox reg loss type '{self.bbox_psuedo_reg_loss_type}'")
 
-        if gt_ious is not None and self.bbox_psuedo_reg_loss_type != "robust_loss":
-            fg_gt_ious = gt_ious.unsqueeze(dim=-1)[fg_inds]
-            loss_box_reg = (loss_box_reg * fg_gt_ious).sum()
+        if weight_for_box_reg is not None and self.bbox_psuedo_reg_loss_type != "robust_loss":
+            fg_weight_for_box_reg = weight_for_box_reg.unsqueeze(dim=-1)[fg_inds]
+            loss_box_reg = (loss_box_reg * fg_weight_for_box_reg).sum()
         else:
             loss_box_reg = loss_box_reg.sum()
 
@@ -213,14 +235,10 @@ class FastRCNNFocaltLossOutputLayers(FastRCNNOutputLayers):
             fg_pred_deltas = pred_deltas.view(-1, self.num_classes, box_dim)[
                 fg_inds, gt_classes[fg_inds]
             ]
-            fg_pred_ious = pred_ious.view(-1, self.num_classes)[
-                fg_inds, gt_classes[fg_inds]
-            ]
+            fg_pred_ious = pred_ious.view(-1, self.num_classes)[fg_inds, gt_classes[fg_inds]]
 
         # get preditions in format [x1, x2, y1, y2]
-        fg_pred_boxes = self.box2box_transform.apply_deltas(
-            fg_pred_deltas, proposal_boxes[fg_inds]
-        )
+        fg_pred_boxes = self.box2box_transform.apply_deltas(fg_pred_deltas, proposal_boxes[fg_inds])
         # calculate iou between predictons and ground truth
         iou_targets = box_iou(fg_pred_boxes, gt_boxes[fg_inds])
         iou_ids = tuple(range(iou_targets.size(0)))
@@ -228,23 +246,23 @@ class FastRCNNFocaltLossOutputLayers(FastRCNNOutputLayers):
 
         if self.iou_loss_fn == "L1Loss":
             loss_iou_reg = smooth_l1_loss(
-                fg_pred_ious, iou_targets.detach(),
-                beta=0, reduction="sum"
+                fg_pred_ious, iou_targets.detach(), beta=0, reduction="sum"
             )
         elif self.iou_loss_fn == "BinaryCrossEntropy":
             loss_iou_reg = F.binary_cross_entropy(
-                fg_pred_ious, iou_targets.detach(),
-                reduction="sum"
+                fg_pred_ious, iou_targets.detach(), reduction="sum"
             )
         else:
             raise NotImplementedError
 
         return loss_iou_reg / max(gt_classes.numel(), 1.0)
 
-    def inference(self,
-                  predictions: Tuple[torch.Tensor, ...],
-                  proposals: List[Instances],
-                  pred_iou: bool = False):
+    def inference(
+        self,
+        predictions: Tuple[torch.Tensor, ...],
+        proposals: List[Instances],
+        pred_iou: bool = False,
+    ):
         if pred_iou:
             scores, proposal_deltas, ious = predictions
             pred_boxes = self.predict_boxes((scores, proposal_deltas), proposals)
@@ -264,9 +282,7 @@ class FastRCNNFocaltLossOutputLayers(FastRCNNOutputLayers):
         else:
             return super().inference(predictions, proposals)
 
-    def predict_ious(
-        self, ious: torch.Tensor, proposals: List[Instances]
-    ):
+    def predict_ious(self, ious: torch.Tensor, proposals: List[Instances]):
         if not len(proposals):
             return []
 
@@ -335,11 +351,18 @@ def fast_rcnn_inference_with_iou(
     """
     result_per_image = [
         fast_rcnn_inference_single_image_with_iou(
-            boxes_per_image, scores_per_image, ious_per_image, image_shape,
-            score_thresh, nms_thresh, topk_per_image, use_det_score
+            boxes_per_image,
+            scores_per_image,
+            ious_per_image,
+            image_shape,
+            score_thresh,
+            nms_thresh,
+            topk_per_image,
+            use_det_score,
         )
-        for scores_per_image, boxes_per_image, ious_per_image, image_shape
-        in zip(scores, boxes, ious, image_shapes)
+        for scores_per_image, boxes_per_image, ious_per_image, image_shape in zip(
+            scores, boxes, ious, image_shapes
+        )
     ]
     return [x[0] for x in result_per_image], [x[1] for x in result_per_image]
 
@@ -400,9 +423,12 @@ def fast_rcnn_inference_single_image_with_iou(
     keep = batched_nms(boxes, scores, filter_inds[:, 1], nms_thresh)
     if topk_per_image >= 0:
         keep = keep[:topk_per_image]
-    (
-        boxes, scores, ious, filter_inds
-    ) = boxes[keep], scores[keep], ious[keep], filter_inds[keep]
+    (boxes, scores, ious, filter_inds) = (
+        boxes[keep],
+        scores[keep],
+        ious[keep],
+        filter_inds[keep],
+    )
 
     result = Instances(image_shape)
     result.pred_boxes = Boxes(boxes)
@@ -421,7 +447,7 @@ def robust_loss(
     gt_pred_deltas: torch.Tensor,
     gt_ious: torch.Tensor,
     param_c: float,
-    reduction: str = "none"
+    reduction: str = "none",
 ) -> torch.Tensor:
     """
     general robust loss defined in the paper "A General and Adaptive Robust Loss Function"
@@ -445,31 +471,17 @@ def robust_loss(
     # loss for alpha (-Inf, 1] except 0
     abs_alpha_minus_2 = torch.abs(alpha - 2.0)
     inner_func = (torch.pow(x / param_c, 2.0) / abs_alpha_minus_2) + 1.0
-    loss_otherwise = (abs_alpha_minus_2 / alpha) * (
-        torch.pow(inner_func, alpha / 2.0) - 1.0
-    )
+    loss_otherwise = (abs_alpha_minus_2 / alpha) * (torch.pow(inner_func, alpha / 2.0) - 1.0)
 
     # loss for alpha 0
-    loss_0 = torch.log(
-        0.5 * torch.pow(x / param_c, 2.0) + 1.0
-    )
+    loss_0 = torch.log(0.5 * torch.pow(x / param_c, 2.0) + 1.0)
 
     # loss for alpha -Inf
-    loss_minus_Inf = 1.0 - torch.exp(
-        -0.5 * torch.pow(x / param_c, 2.0)
-    )
+    loss_minus_Inf = 1.0 - torch.exp(-0.5 * torch.pow(x / param_c, 2.0))
 
     # aggregating loss
-    loss = torch.where(
-        alpha == -float("Inf"),
-        loss_minus_Inf,
-        loss_otherwise
-    )
-    loss = torch.where(
-        alpha == 0.0,
-        loss_0,
-        loss
-    )
+    loss = torch.where(alpha == -float("Inf"), loss_minus_Inf, loss_otherwise)
+    loss = torch.where(alpha == 0.0, loss_0, loss)
 
     if reduction == "mean":
         loss = loss.mean() if loss.numel() > 0 else 0.0 * loss.sum()

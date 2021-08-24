@@ -301,6 +301,7 @@ class UBTeacherTrainer(DefaultTrainer):
         if self.with_iou:
             assert self.calc_pseudo_loc_loss, \
                 "If use iou branch, cfg.SEMISUPNET.CALC_PSEUDO_LOC_LOSS needs to be True"
+        self.use_det_score = cfg.MODEL.ROI_BOX_HEAD.USE_DET_SCORE
 
         # For training, wrap with DDP. But don't need this for inference.
         if comm.get_world_size() > 1:
@@ -453,12 +454,15 @@ class UBTeacherTrainer(DefaultTrainer):
                 valid_map
             ]
         elif proposal_type == "roih":
-            valid_map = proposal_bbox_inst.scores > thres
-            if self.with_iou and (
-                self.cfg.SEMISUPNET.IOU_FILTERING
-                in ["thresholding", "thres_and_weight"]
-            ):
-                valid_map = valid_map & (proposal_bbox_inst.pred_ious > iou_thres)
+            if self.use_det_score:
+                valid_map = proposal_bbox_inst.det_scores > thres
+            else:
+                valid_map = proposal_bbox_inst.scores > thres
+                if self.with_iou and (
+                    self.cfg.SEMISUPNET.IOU_FILTERING
+                    in ["thresholding", "thres_and_weight"]
+                ):
+                    valid_map = valid_map & (proposal_bbox_inst.pred_ious > iou_thres)
 
             # create instances containing boxes and gt_classes
             image_shape = proposal_bbox_inst.image_size
@@ -471,9 +475,13 @@ class UBTeacherTrainer(DefaultTrainer):
             # add boxes to instances
             new_proposal_inst.gt_boxes = new_boxes
             new_proposal_inst.gt_classes = proposal_bbox_inst.pred_classes[valid_map]
-            new_proposal_inst.scores = proposal_bbox_inst.scores[valid_map]
+            if self.use_det_score:
+                new_proposal_inst.scores = proposal_bbox_inst.scores[valid_map].detach()
+                new_proposal_inst.det_scores = proposal_bbox_inst.det_scores[valid_map].detach()
+            else:
+                new_proposal_inst.scores = proposal_bbox_inst.scores[valid_map].detach()
             if self.with_iou:
-                new_proposal_inst.gt_ious = proposal_bbox_inst.pred_ious[valid_map]
+                new_proposal_inst.gt_ious = proposal_bbox_inst.pred_ious[valid_map].detach()
 
         return new_proposal_inst
 
