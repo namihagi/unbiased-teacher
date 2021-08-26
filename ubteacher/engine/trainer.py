@@ -495,7 +495,9 @@ class UBTeacherTrainer(DefaultTrainer):
             # thresholding
             if psedo_label_method == "thresholding":
                 proposal_bbox_inst = self.threshold_bbox(
-                    proposal_bbox_inst, thres=cur_threshold, iou_thres=iou_threshold,
+                    proposal_bbox_inst,
+                    thres=cur_threshold,
+                    iou_thres=iou_threshold,
                     proposal_type=proposal_type
                 )
             else:
@@ -602,7 +604,6 @@ class UBTeacherTrainer(DefaultTrainer):
             record_dict['num_pseudo_bbox_per_image'] = num_pseudo_bbox_roi
 
             #  add pseudo-label to unlabeled data
-
             unlabel_data_q = self.add_label(
                 unlabel_data_q, joint_proposal_dict["proposals_pseudo_roih"]
             )
