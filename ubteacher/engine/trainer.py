@@ -548,7 +548,15 @@ class UBTeacherTrainer(DefaultTrainer):
             loss_dict = {}
             for key in record_dict.keys():
                 if key[:4] == "loss":
-                    loss_dict[key] = record_dict[key] * 1
+                    if key == "loss_iou":
+                        loss_dict[key] = (
+                            record_dict[key]
+                            * self.cfg.SEMISUPNET.IOU_LOSS_WEIGHT
+                        )
+
+                    else:
+                        loss_dict[key] = record_dict[key] * 1
+
             losses = sum(loss_dict.values())
 
         else:
@@ -646,6 +654,7 @@ class UBTeacherTrainer(DefaultTrainer):
                         # pseudo bbox regression <- 0
                         loss_dict[key] = record_dict[key] * 0
                         record_dict_weighted[key + "_weighted"] = loss_dict[key]
+
                     elif (
                         not self.calc_pseudo_iou_loss
                         and (key == "loss_iou_pseudo")
@@ -653,12 +662,28 @@ class UBTeacherTrainer(DefaultTrainer):
                         # pseudo iou prediction <- 0
                         loss_dict[key] = record_dict[key] * 0
                         record_dict_weighted[key + "_weighted"] = loss_dict[key]
+
+                    elif key == "loss_iou_pseudo":
+                        loss_dict[key] = (
+                            record_dict[key]
+                            * self.cfg.SEMISUPNET.PSEUDO_IOU_LOSS_WEIGHT
+                        )
+                        record_dict_weighted[key + "_weighted"] = loss_dict[key]
+
+                    elif key == "loss_iou":
+                        loss_dict[key] = (
+                            record_dict[key]
+                            * self.cfg.SEMISUPNET.IOU_LOSS_WEIGHT
+                        )
+                        record_dict_weighted[key + "_weighted"] = loss_dict[key]
+
                     elif key[-6:] == "pseudo":  # unsupervised loss
                         loss_dict[key] = (
                             record_dict[key]
                             * self.cfg.SEMISUPNET.UNSUP_LOSS_WEIGHT
                         )
                         record_dict_weighted[key + "_weighted"] = loss_dict[key]
+
                     else:  # supervised loss
                         loss_dict[key] = record_dict[key] * 1
 
