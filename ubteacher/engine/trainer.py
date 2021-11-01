@@ -1,41 +1,44 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
+import logging
 import os
 import time
-import logging
-import torch
-from torch.nn.parallel import DistributedDataParallel
-from fvcore.nn.precise_bn import get_bn_modules
-import numpy as np
 from collections import OrderedDict
 
 import detectron2.utils.comm as comm
+import numpy as np
+import torch
 from detectron2.checkpoint import DetectionCheckpointer
-from detectron2.engine import DefaultTrainer, SimpleTrainer, TrainerBase
+from detectron2.data import MetadataCatalog
+from detectron2.engine import DefaultTrainer, SimpleTrainer, TrainerBase, hooks
 from detectron2.engine.train_loop import AMPTrainer
-from detectron2.utils.events import EventStorage
-from detectron2.evaluation import COCOEvaluator, verify_results, PascalVOCDetectionEvaluator, DatasetEvaluators
-from detectron2.data.dataset_mapper import DatasetMapper
-from detectron2.engine import hooks
+from detectron2.evaluation import (
+    COCOEvaluator,
+    DatasetEvaluators,
+    PascalVOCDetectionEvaluator,
+    verify_results,
+)
 from detectron2.structures.boxes import Boxes
 from detectron2.structures.instances import Instances
-from detectron2.utils.logger import setup_logger
 from detectron2.utils.env import TORCH_VERSION
-from detectron2.data import MetadataCatalog
-
+from detectron2.utils.events import EventStorage
+from detectron2.utils.logger import setup_logger
+from fvcore.nn.precise_bn import get_bn_modules
+from torch.nn.parallel import DistributedDataParallel
+from ubteacher.checkpoint.detection_checkpoint import DetectionTSCheckpointer
 from ubteacher.data.build import (
     build_detection_semisup_train_loader,
-    build_detection_test_loader_with_train_mode,
-    build_detection_test_loader,
     build_detection_semisup_train_loader_two_crops,
+    build_detection_test_loader,
+    build_detection_test_loader_with_train_mode,
 )
 from ubteacher.data.dataset_mapper import DatasetMapperTwoCropSeparate
-from ubteacher.engine.hooks import LossEvalHook
-from ubteacher.modeling.meta_arch.ts_ensemble import EnsembleTSModel
-from ubteacher.checkpoint.detection_checkpoint import DetectionTSCheckpointer
-from ubteacher.solver.build import build_lr_scheduler
-from ubteacher.evaluation.coco_evaluation_with_psedo_label import COCOEvaluatorWithPseudoLabel
+from ubteacher.evaluation.coco_evaluation_with_psedo_label import (
+    COCOEvaluatorWithPseudoLabel,
+)
 from ubteacher.evaluation.evaluator import inference_on_dataset_for_pseudo_label
 from ubteacher.evaluation.testing import print_matching_results
+from ubteacher.modeling.meta_arch.ts_ensemble import EnsembleTSModel
+from ubteacher.solver.build import build_lr_scheduler
 
 
 # Supervised-only Trainer
@@ -81,9 +84,9 @@ class BaselineTrainer(DefaultTrainer):
         a `last_checkpoint` file), resume from the file. Resuming means loading all
         available states (eg. optimizer and scheduler) and update iteration counter
         from the checkpoint. ``cfg.MODEL.WEIGHTS`` will not be used.
-        Otherwise, this is considered as an independent training. The method will load model
-        weights from the file `cfg.MODEL.WEIGHTS` (but will not load other states) and start
-        from iteration 0.
+        Otherwise, this is considered as an independent training.
+        The method will load model weights from the file `cfg.MODEL.WEIGHTS`
+        (but will not load other states) and start from iteration 0.
         Args:
             resume (bool): whether to do resume or not
         """
@@ -92,8 +95,9 @@ class BaselineTrainer(DefaultTrainer):
         )
         if resume and self.checkpointer.has_checkpoint():
             self.start_iter = checkpoint.get("iteration", -1) + 1
-            # The checkpoint stores the training iteration that just finished, thus we start
-            # at the next iteration (or iter zero if there's no checkpoint).
+            # The checkpoint stores the training iteration that just finished,
+            # thus we start at the next iteration
+            # (or iter zero if there's no checkpoint).
         if isinstance(self.model, DistributedDataParallel):
             # broadcast loaded data/model from the first rank, because other
             # machines may not have access to the checkpoint file
@@ -165,8 +169,7 @@ class BaselineTrainer(DefaultTrainer):
         evaluator_type = MetadataCatalog.get(dataset_name).evaluator_type
 
         if evaluator_type == "coco":
-            evaluator_list.append(COCOEvaluator(
-                dataset_name, output_dir=output_folder))
+            evaluator_list.append(COCOEvaluator(dataset_name, output_dir=output_folder))
         elif evaluator_type == "pascal_voc":
             return PascalVOCDetectionEvaluator(dataset_name)
         if len(evaluator_list) == 0:
@@ -250,8 +253,7 @@ class BaselineTrainer(DefaultTrainer):
 
         if comm.is_main_process():
             if "data_time" in all_metrics_dict[0]:
-                data_time = np.max([x.pop("data_time")
-                                   for x in all_metrics_dict])
+                data_time = np.max([x.pop("data_time") for x in all_metrics_dict])
                 self.storage.put_scalar("data_time", data_time)
 
             metrics_dict = {
@@ -299,8 +301,9 @@ class UBTeacherTrainer(DefaultTrainer):
         self.calc_pseudo_loc_loss = cfg.SEMISUPNET.CALC_PSEUDO_LOC_LOSS
         self.calc_pseudo_iou_loss = cfg.SEMISUPNET.CALC_PSEUDO_IOU_LOSS
         if self.with_iou:
-            assert self.calc_pseudo_loc_loss, \
-                "If use iou branch, cfg.SEMISUPNET.CALC_PSEUDO_LOC_LOSS needs to be True"
+            assert (
+                self.calc_pseudo_loc_loss
+            ), "If use iou branch, cfg.SEMISUPNET.CALC_PSEUDO_LOC_LOSS needs to be True"
         self.use_det_score = cfg.MODEL.ROI_BOX_HEAD.USE_DET_SCORE
 
         # For training, wrap with DDP. But don't need this for inference.
@@ -329,14 +332,20 @@ class UBTeacherTrainer(DefaultTrainer):
         self.cfg = cfg
 
         # about iou prediction
-        assert (cfg.SEMISUPNET.IOU_FILTERING
-                in ["thresholding", "weighting_loss", "thres_and_weight"])
-        self.weight_on_iou = (cfg.SEMISUPNET.IOU_FILTERING
-                              in ["weighting_loss", "thres_and_weight"])
+        assert cfg.SEMISUPNET.IOU_FILTERING in [
+            "thresholding",
+            "weighting_loss",
+            "thres_and_weight",
+        ]
+        self.weight_on_iou = cfg.SEMISUPNET.IOU_FILTERING in [
+            "weighting_loss",
+            "thres_and_weight",
+        ]
         if cfg.MODEL.ROI_BOX_HEAD.BBOX_PSUEDO_REG_LOSS_TYPE == "robust_loss":
-            assert self.weight_on_iou, \
-                "when MODEL.ROI_BOX_HEAD.BBOX_PSUEDO_REG_LOSS_TYPE is 'robust_loss', " \
+            assert self.weight_on_iou, (
+                "when MODEL.ROI_BOX_HEAD.BBOX_PSUEDO_REG_LOSS_TYPE is 'robust_loss', "
                 "IOU_FILTERING need to be 'weighting_loss'."
+            )
 
         self.register_hooks(self.build_hooks())
 
@@ -346,9 +355,9 @@ class UBTeacherTrainer(DefaultTrainer):
         a `last_checkpoint` file), resume from the file. Resuming means loading all
         available states (eg. optimizer and scheduler) and update iteration counter
         from the checkpoint. ``cfg.MODEL.WEIGHTS`` will not be used.
-        Otherwise, this is considered as an independent training. The method will load model
-        weights from the file `cfg.MODEL.WEIGHTS` (but will not load other states) and start
-        from iteration 0.
+        Otherwise, this is considered as an independent training.
+        The method will load model weights from the file `cfg.MODEL.WEIGHTS`
+        (but will not load other states) and start from iteration 0.
         Args:
             resume (bool): whether to do resume or not
         """
@@ -357,8 +366,9 @@ class UBTeacherTrainer(DefaultTrainer):
         )
         if resume and self.checkpointer.has_checkpoint():
             self.start_iter = checkpoint.get("iteration", -1) + 1
-            # The checkpoint stores the training iteration that just finished, thus we start
-            # at the next iteration (or iter zero if there's no checkpoint).
+            # The checkpoint stores the training iteration that just finished,
+            # thus we start at the next iteration
+            # (or iter zero if there's no checkpoint).
         if isinstance(self.model, DistributedDataParallel):
             # broadcast loaded data/model from the first rank, because other
             # machines may not have access to the checkpoint file
@@ -374,14 +384,11 @@ class UBTeacherTrainer(DefaultTrainer):
         evaluator_type = MetadataCatalog.get(dataset_name).evaluator_type
 
         if evaluator_type == "coco":
-            evaluator_list.append(COCOEvaluator(
-                dataset_name, output_dir=output_folder))
+            evaluator_list.append(COCOEvaluator(dataset_name, output_dir=output_folder))
         elif evaluator_type == "pascal_voc":
             if cfg.TEST.EVALUATOR == "COCOeval":
                 evaluator_list.append(
-                    COCOEvaluator(
-                        dataset_name,
-                        output_dir=output_folder)
+                    COCOEvaluator(dataset_name, output_dir=output_folder)
                 )
             else:
                 return PascalVOCDetectionEvaluator(dataset_name)
@@ -435,8 +442,9 @@ class UBTeacherTrainer(DefaultTrainer):
     # =====================================================
     # ================== Pseduo-labeling ==================
     # =====================================================
-    def threshold_bbox(self, proposal_bbox_inst, thres=0.7,
-                       iou_thres=0.5, proposal_type="roih"):
+    def threshold_bbox(
+        self, proposal_bbox_inst, thres=0.7, iou_thres=0.5, proposal_type="roih"
+    ):
         if proposal_type == "rpn":
             valid_map = proposal_bbox_inst.objectness_logits > thres
 
@@ -477,17 +485,25 @@ class UBTeacherTrainer(DefaultTrainer):
             new_proposal_inst.gt_classes = proposal_bbox_inst.pred_classes[valid_map]
             if self.use_det_score:
                 new_proposal_inst.scores = proposal_bbox_inst.scores[valid_map].detach()
-                new_proposal_inst.det_scores = proposal_bbox_inst.det_scores[valid_map].detach()
+                new_proposal_inst.det_scores = proposal_bbox_inst.det_scores[
+                    valid_map
+                ].detach()
             else:
                 new_proposal_inst.scores = proposal_bbox_inst.scores[valid_map].detach()
             if self.with_iou:
-                new_proposal_inst.gt_ious = proposal_bbox_inst.pred_ious[valid_map].detach()
+                new_proposal_inst.gt_ious = proposal_bbox_inst.pred_ious[
+                    valid_map
+                ].detach()
 
         return new_proposal_inst
 
     def process_pseudo_label(
-        self, proposals_rpn_unsup_k, cur_threshold, proposal_type,
-        psedo_label_method="", iou_threshold=0.5
+        self,
+        proposals_rpn_unsup_k,
+        cur_threshold,
+        proposal_type,
+        psedo_label_method="",
+        iou_threshold=0.5,
     ):
         list_instances = []
         num_proposal_output = 0.0
@@ -498,7 +514,7 @@ class UBTeacherTrainer(DefaultTrainer):
                     proposal_bbox_inst,
                     thres=cur_threshold,
                     iou_thres=iou_threshold,
-                    proposal_type=proposal_type
+                    proposal_type=proposal_type,
                 )
             else:
                 raise ValueError("Unkown pseudo label boxes methods")
@@ -541,8 +557,7 @@ class UBTeacherTrainer(DefaultTrainer):
 
             # input both strong and weak supervised data into model
             label_data_q.extend(label_data_k)
-            record_dict, _, _, _ = self.model(label_data_q,
-                                              branch="supervised")
+            record_dict, _, _, _ = self.model(label_data_q, branch="supervised")
 
             # weight losses
             loss_dict = {}
@@ -550,8 +565,7 @@ class UBTeacherTrainer(DefaultTrainer):
                 if key[:4] == "loss":
                     if key == "loss_iou":
                         loss_dict[key] = (
-                            record_dict[key]
-                            * self.cfg.SEMISUPNET.IOU_LOSS_WEIGHT
+                            record_dict[key] * self.cfg.SEMISUPNET.IOU_LOSS_WEIGHT
                         )
 
                     else:
@@ -567,24 +581,23 @@ class UBTeacherTrainer(DefaultTrainer):
             elif (
                 self.iter - self.cfg.SEMISUPNET.BURN_UP_STEP
             ) % self.cfg.SEMISUPNET.TEACHER_UPDATE_ITER == 0:
-                self._update_teacher_model(
-                    keep_rate=self.cfg.SEMISUPNET.EMA_KEEP_RATE)
+                self._update_teacher_model(keep_rate=self.cfg.SEMISUPNET.EMA_KEEP_RATE)
 
             if self.iter + 1 in self.cfg.SEMISUPNET.TEACHER_REFINE_STEP:
                 self._sync_model()
 
             record_dict = {}
-            #  generate the pseudo-label using teacher model
-            # note that we do not convert to eval mode, as 1) there is no gradient computed in
-            # teacher model and 2) batch norm layers are not updated as well
+            # generate the pseudo-label using teacher model
+            # note that we do not convert to eval mode,
+            # as 1) there is no gradient computed in teacher model
+            # and 2) batch norm layers are not updated as well
             with torch.no_grad():
                 (
                     _,
                     proposals_rpn_unsup_k,
                     proposals_roih_unsup_k,
                     _,
-                ) = self.model_teacher(unlabel_data_k,
-                                       branch="unsup_data_weak")
+                ) = self.model_teacher(unlabel_data_k, branch="unsup_data_weak")
 
             #  Pseudo-labeling
             cur_threshold = self.cfg.SEMISUPNET.BBOX_THRESHOLD
@@ -596,20 +609,26 @@ class UBTeacherTrainer(DefaultTrainer):
                 pesudo_proposals_rpn_unsup_k,
                 nun_pseudo_bbox_rpn,
             ) = self.process_pseudo_label(
-                proposals_rpn_unsup_k, cur_threshold,
-                "rpn", "thresholding", iou_threshold
+                proposals_rpn_unsup_k,
+                cur_threshold,
+                "rpn",
+                "thresholding",
+                iou_threshold,
             )
             joint_proposal_dict["proposals_pseudo_rpn"] = pesudo_proposals_rpn_unsup_k
             # Pseudo_labeling for ROI head (bbox location/objectness)
             (
                 pesudo_proposals_roih_unsup_k,
-                num_pseudo_bbox_roi
+                num_pseudo_bbox_roi,
             ) = self.process_pseudo_label(
-                proposals_roih_unsup_k, cur_threshold,
-                "roih", "thresholding", iou_threshold
+                proposals_roih_unsup_k,
+                cur_threshold,
+                "roih",
+                "thresholding",
+                iou_threshold,
             )
             joint_proposal_dict["proposals_pseudo_roih"] = pesudo_proposals_roih_unsup_k
-            record_dict['num_pseudo_bbox_per_image'] = num_pseudo_bbox_roi
+            record_dict["num_pseudo_bbox_per_image"] = num_pseudo_bbox_roi
 
             #  add pseudo-label to unlabeled data
             unlabel_data_q = self.add_label(
@@ -628,9 +647,7 @@ class UBTeacherTrainer(DefaultTrainer):
             )
             record_dict.update(record_all_label_data)
             record_all_unlabel_data, _, _, _ = self.model(
-                all_unlabel_data,
-                branch="supervised",
-                weight_on_iou=self.weight_on_iou
+                all_unlabel_data, branch="supervised", weight_on_iou=self.weight_on_iou
             )
             new_record_all_unlabel_data = {}
             for key in record_all_unlabel_data.keys():
@@ -644,21 +661,14 @@ class UBTeacherTrainer(DefaultTrainer):
             record_dict_weighted = {}
             for key in record_dict.keys():
                 if key[:4] == "loss":
-                    if (
-                        not self.calc_pseudo_loc_loss
-                        and (
-                            key == "loss_rpn_loc_pseudo"
-                            or key == "loss_box_reg_pseudo"
-                        )
+                    if not self.calc_pseudo_loc_loss and (
+                        key == "loss_rpn_loc_pseudo" or key == "loss_box_reg_pseudo"
                     ):
                         # pseudo bbox regression <- 0
                         loss_dict[key] = record_dict[key] * 0
                         record_dict_weighted[key + "_weighted"] = loss_dict[key]
 
-                    elif (
-                        not self.calc_pseudo_iou_loss
-                        and (key == "loss_iou_pseudo")
-                    ):
+                    elif not self.calc_pseudo_iou_loss and (key == "loss_iou_pseudo"):
                         # pseudo iou prediction <- 0
                         loss_dict[key] = record_dict[key] * 0
                         record_dict_weighted[key + "_weighted"] = loss_dict[key]
@@ -672,15 +682,13 @@ class UBTeacherTrainer(DefaultTrainer):
 
                     elif key == "loss_iou":
                         loss_dict[key] = (
-                            record_dict[key]
-                            * self.cfg.SEMISUPNET.IOU_LOSS_WEIGHT
+                            record_dict[key] * self.cfg.SEMISUPNET.IOU_LOSS_WEIGHT
                         )
                         record_dict_weighted[key + "_weighted"] = loss_dict[key]
 
                     elif key[-6:] == "pseudo":  # unsupervised loss
                         loss_dict[key] = (
-                            record_dict[key]
-                            * self.cfg.SEMISUPNET.UNSUP_LOSS_WEIGHT
+                            record_dict[key] * self.cfg.SEMISUPNET.UNSUP_LOSS_WEIGHT
                         )
                         record_dict_weighted[key + "_weighted"] = loss_dict[key]
 
@@ -714,8 +722,7 @@ class UBTeacherTrainer(DefaultTrainer):
             if "data_time" in all_metrics_dict[0]:
                 # data_time among workers can have high variance. The actual latency
                 # caused by data_time is the maximum among workers.
-                data_time = np.max([x.pop("data_time")
-                                   for x in all_metrics_dict])
+                data_time = np.max([x.pop("data_time") for x in all_metrics_dict])
                 self.storage.put_scalar("data_time", data_time)
 
             # average the rest metrics
@@ -749,8 +756,7 @@ class UBTeacherTrainer(DefaultTrainer):
         for key, value in self.model_teacher.state_dict().items():
             if key in student_model_dict.keys():
                 new_teacher_dict[key] = (
-                    student_model_dict[key]
-                    * (1 - keep_rate) + value * keep_rate
+                    student_model_dict[key] * (1 - keep_rate) + value * keep_rate
                 )
             else:
                 raise Exception("{} is not found in student model".format(key))
@@ -772,7 +778,8 @@ class UBTeacherTrainer(DefaultTrainer):
         # Synchronizing student model with teacher model
         if comm.get_world_size() > 1:
             rename_model_dict = {
-                "module." + key: value for key, value in self.model_teacher.state_dict().items()
+                "module." + key: value
+                for key, value in self.model_teacher.state_dict().items()
             }
             self.model.load_state_dict(rename_model_dict)
         else:
@@ -826,14 +833,11 @@ class UBTeacherTrainer(DefaultTrainer):
             return _last_eval_results_student
 
         def test_and_save_results_teacher():
-            self._last_eval_results_teacher = self.test(
-                self.cfg, self.model_teacher)
+            self._last_eval_results_teacher = self.test(self.cfg, self.model_teacher)
             return self._last_eval_results_teacher
 
-        ret.append(hooks.EvalHook(cfg.TEST.EVAL_PERIOD,
-                   test_and_save_results_student))
-        ret.append(hooks.EvalHook(cfg.TEST.EVAL_PERIOD,
-                   test_and_save_results_teacher))
+        ret.append(hooks.EvalHook(cfg.TEST.EVAL_PERIOD, test_and_save_results_student))
+        ret.append(hooks.EvalHook(cfg.TEST.EVAL_PERIOD, test_and_save_results_teacher))
 
         if comm.is_main_process():
             # run writers in the end, so that evaluation metrics are written
@@ -866,13 +870,17 @@ class UBTeacherTrainer(DefaultTrainer):
         evaluator = COCOEvaluatorWithPseudoLabel(
             distributed=True,
             output_dir=output_folder,
-            ckpt_iter=cfg.SEMISUPNET.EVAL_CKPT_ITERATION
+            ckpt_iter=cfg.SEMISUPNET.EVAL_CKPT_ITERATION,
         )
 
         results = inference_on_dataset_for_pseudo_label(
-            model, eval_data_loader, evaluator, with_iou=with_iou,
+            model,
+            eval_data_loader,
+            evaluator,
+            with_iou=with_iou,
             cur_threshold=cur_threshold,
-            iou_filtering=iou_filtering, iou_threshold=iou_threshold
+            iou_filtering=iou_filtering,
+            iou_threshold=iou_threshold,
         )
 
         if comm.is_main_process():

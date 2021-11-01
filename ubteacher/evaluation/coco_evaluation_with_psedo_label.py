@@ -45,7 +45,8 @@ class COCOEvaluatorWithPseudoLabel(DatasetEvaluator):
             tasks (tuple[str]): tasks that can be evaluated under the given
                 configuration. A task is one of "bbox", "segm", "keypoints".
                 By default, will infer this automatically from predictions.
-            distributed (True): if True, will collect results from all ranks and run evaluation
+            distributed (True):
+                if True, will collect results from all ranks and run evaluation
                 in the main process.
                 Otherwise, will only evaluate the results in the current process.
             output_dir (str): optional, an output directory to dump all
@@ -87,16 +88,16 @@ class COCOEvaluatorWithPseudoLabel(DatasetEvaluator):
             out_instances = out_instances.to(self._cpu_device)
             pseudo_boxes = out_instances.gt_boxes.tensor
             pseudo_classes = out_instances.gt_classes
-            pseudo_ious = out_instances.gt_ious \
-                if out_instances.has("gt_ious") else None
+            pseudo_ious = (
+                out_instances.gt_ious if out_instances.has("gt_ious") else None
+            )
 
-            gt_instances = input['instances'].to(self._cpu_device)
+            gt_instances = input["instances"].to(self._cpu_device)
             gt_boxes = gt_instances.gt_boxes.tensor
             gt_classes = gt_instances.gt_classes
 
             matching = box_matching(
-                gt_boxes, gt_classes,
-                pseudo_boxes, pseudo_classes, pseudo_ious
+                gt_boxes, gt_classes, pseudo_boxes, pseudo_classes, pseudo_ious
             )
             matching.update({"image_id": input["image_id"]})
 
@@ -123,15 +124,20 @@ class COCOEvaluatorWithPseudoLabel(DatasetEvaluator):
         self._eval_matching_cls_agnostic(matching, device, base="pseudo")
         self._eval_matching_cls_specific(matching, device, base="gt")
         self._eval_matching_cls_specific(matching, device, base="pseudo")
+        self._iou_distribution(matching)
 
         if self._output_dir:
             PathManager.mkdirs(self._output_dir)
             # save matching
-            file_path = os.path.join(self._output_dir, f"pseudo_label_at_{self._ckpt_iter}.pth")
+            file_path = os.path.join(
+                self._output_dir, f"pseudo_label_at_{self._ckpt_iter}.pth"
+            )
             with PathManager.open(file_path, "wb") as f:
                 torch.save(matching, f)
             # save results
-            file_path = os.path.join(self._output_dir, f"results_at_{self._ckpt_iter}.pth")
+            file_path = os.path.join(
+                self._output_dir, f"results_at_{self._ckpt_iter}.pth"
+            )
             with PathManager.open(file_path, "wb") as f:
                 torch.save(self._results, f)
 
@@ -145,7 +151,9 @@ class COCOEvaluatorWithPseudoLabel(DatasetEvaluator):
                 return {}
 
         # load matching
-        file_path = os.path.join(self._output_dir, f"pseudo_label_at_{self._ckpt_iter}.pth")
+        file_path = os.path.join(
+            self._output_dir, f"pseudo_label_at_{self._ckpt_iter}.pth"
+        )
         self._logger.info(f"Loading matching from {file_path}...")
         matching = torch.load(file_path)
 
@@ -159,7 +167,9 @@ class COCOEvaluatorWithPseudoLabel(DatasetEvaluator):
         if self._output_dir:
             PathManager.mkdirs(self._output_dir)
             # save results
-            file_path = os.path.join(self._output_dir, f"results_at_{self._ckpt_iter}.pth")
+            file_path = os.path.join(
+                self._output_dir, f"results_at_{self._ckpt_iter}.pth"
+            )
             with PathManager.open(file_path, "wb") as f:
                 torch.save(self._results, f)
 
@@ -172,7 +182,8 @@ class COCOEvaluatorWithPseudoLabel(DatasetEvaluator):
             try:
                 device = result["matching_labels_on_gt"]["ious_of_matched_pairs"].device
                 break
-            except:
+            except Exception as E:
+                self._logger.warning(E)
                 continue
         if device is None:
             device = self._cpu_device
@@ -193,8 +204,9 @@ class COCOEvaluatorWithPseudoLabel(DatasetEvaluator):
 
         num_gt = 0
         iou_dist_of_matched_boxes = torch.zeros(10, dtype=torch.int64, device=device)
-        iou_dist_of_matched_boxes_and_cls = \
-            torch.zeros(10, dtype=torch.int64, device=device)
+        iou_dist_of_matched_boxes_and_cls = torch.zeros(
+            10, dtype=torch.int64, device=device
+        )
 
         for matching in matching_dict:
             num_gt_per_img = matching["num_gt_boxes"]
@@ -212,34 +224,34 @@ class COCOEvaluatorWithPseudoLabel(DatasetEvaluator):
                 matched_gt_labels = matching_labels_on_gt["matched_gt_labels"]
                 matched_pseudo_labels = matching_labels_on_gt["matched_pseudo_labels"]
 
-                for iou, gt_label, pseudo_label in zip(ious_of_matched_pairs,
-                                                       matched_gt_labels,
-                                                       matched_pseudo_labels):
+                for iou, gt_label, pseudo_label in zip(
+                    ious_of_matched_pairs, matched_gt_labels, matched_pseudo_labels
+                ):
                     idx = 9 - int(iou.item() * 10 // 1)
                     iou_dist_of_matched_boxes[idx] += 1
                     if gt_label == pseudo_label:
                         iou_dist_of_matched_boxes_and_cls[idx] += 1
 
-        num_matched_pseudo_boxes = \
-            torch.cumsum(iou_dist_of_matched_boxes, 0)
-        num_matched_pseudo_boxes_and_cls = \
-            torch.cumsum(iou_dist_of_matched_boxes_and_cls, 0)
+        num_matched_pseudo_boxes = torch.cumsum(iou_dist_of_matched_boxes, 0)
+        num_matched_pseudo_boxes_and_cls = torch.cumsum(
+            iou_dist_of_matched_boxes_and_cls, 0
+        )
 
         if num_gt != 0:
             recall_of_pseudo_boxes = num_matched_pseudo_boxes / num_gt
             recall_of_pseudo_boxes_and_cls = num_matched_pseudo_boxes_and_cls / num_gt
         else:
-            recall_of_pseudo_boxes = \
-                torch.zeros_like(iou_dist_of_matched_boxes)
-            recall_of_pseudo_boxes_and_cls = \
-                torch.zeros_like(iou_dist_of_matched_boxes_and_cls)
+            recall_of_pseudo_boxes = torch.zeros_like(iou_dist_of_matched_boxes)
+            recall_of_pseudo_boxes_and_cls = torch.zeros_like(
+                iou_dist_of_matched_boxes_and_cls
+            )
 
         self._results[f"matching_cls_agnostic_on_{base}"] = {
             "num_gt": num_gt,
             "iou_dist_of_matched_boxes": iou_dist_of_matched_boxes,
             "iou_dist_of_matched_boxes_and_cls": iou_dist_of_matched_boxes_and_cls,
             f"{metric}_of_pseudo_boxes": recall_of_pseudo_boxes,
-            f"{metric}_of_pseudo_boxes_and_cls": recall_of_pseudo_boxes_and_cls
+            f"{metric}_of_pseudo_boxes_and_cls": recall_of_pseudo_boxes_and_cls,
         }
 
     def _eval_matching_cls_specific(self, matching_dict, device, base="gt"):
@@ -263,9 +275,9 @@ class COCOEvaluatorWithPseudoLabel(DatasetEvaluator):
             result[i] = {
                 "class_name": class_names[i],
                 "num_gt_per_cls": 0,
-                "iou_dist_of_matched_boxes": torch.zeros(10,
-                                                         dtype=torch.int64,
-                                                         device=device)
+                "iou_dist_of_matched_boxes": torch.zeros(
+                    10, dtype=torch.int64, device=device
+                ),
             }
 
         for matching in matching_dict:
@@ -279,18 +291,25 @@ class COCOEvaluatorWithPseudoLabel(DatasetEvaluator):
 
         for i in range(num_classes):
             num_gt_per_cls = result[i]["num_gt_per_cls"]
-            iou_dist_of_matched_boxes = \
-                result[i]["iou_dist_of_matched_boxes"]
+            iou_dist_of_matched_boxes = result[i]["iou_dist_of_matched_boxes"]
             if num_gt_per_cls != 0:
-                num_matched_pseudo_boxes = \
-                    torch.cumsum(iou_dist_of_matched_boxes, 0)
-                recall_of_pseudo_boxes = \
-                    num_matched_pseudo_boxes / num_gt_per_cls
+                num_matched_pseudo_boxes = torch.cumsum(iou_dist_of_matched_boxes, 0)
+                recall_of_pseudo_boxes = num_matched_pseudo_boxes / num_gt_per_cls
             else:
-                recall_of_pseudo_boxes = \
-                    torch.zeros_like(iou_dist_of_matched_boxes)
+                recall_of_pseudo_boxes = torch.zeros_like(iou_dist_of_matched_boxes)
 
             result[i]["iou_dist_of_matched_boxes"] = iou_dist_of_matched_boxes
             result[i][f"{metric}_of_pseudo_boxes"] = recall_of_pseudo_boxes
 
         self._results[f"matching_cls_specific_on_{base}"] = result
+
+    def _iou_distribution(self, matching):
+        iou = []
+        ps_iou = []
+        for match in matching:
+            iou.append(match["IoU_dist"]["iou"])
+            ps_iou.append(match["IoU_dist"]["pseudo_ious"])
+        iou = torch.cat(iou)
+        ps_iou = torch.cat(ps_iou)
+
+        self._results["IoU_dist"] = dict(iou=iou, ps_iou=ps_iou)
