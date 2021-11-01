@@ -1,6 +1,6 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
-from torch.nn.parallel import DataParallel, DistributedDataParallel
 import torch.nn as nn
+from torch.nn.parallel import DataParallel, DistributedDataParallel
 
 
 class EnsembleTSModel(nn.Module):

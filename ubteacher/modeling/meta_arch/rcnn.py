@@ -14,8 +14,12 @@ class TwoStagePseudoLabGeneralizedRCNN(GeneralizedRCNN):
         self.pred_iou = cfg.MODEL.ROI_HEADS.IOU_HEAD
 
     def forward(
-        self, batched_inputs, branch="supervised",
-        given_proposals=None, val_mode=False, weight_on_iou=False
+        self,
+        batched_inputs,
+        branch="supervised",
+        given_proposals=None,
+        val_mode=False,
+        weight_on_iou=False,
     ):
         if (not self.training) and (not val_mode):
             return self.inference(batched_inputs)
@@ -37,8 +41,13 @@ class TwoStagePseudoLabGeneralizedRCNN(GeneralizedRCNN):
 
             # # roi_head lower branch
             _, detector_losses = self.roi_heads(
-                images, features, proposals_rpn, gt_instances, branch=branch,
-                pred_iou=self.pred_iou, weight_on_iou=weight_on_iou
+                images,
+                features,
+                proposals_rpn,
+                gt_instances,
+                branch=branch,
+                pred_iou=self.pred_iou,
+                weight_on_iou=weight_on_iou,
             )
 
             losses = {}
@@ -81,7 +90,7 @@ class TwoStagePseudoLabGeneralizedRCNN(GeneralizedRCNN):
                 gt_instances,
                 branch=branch,
                 compute_val_loss=True,
-                pred_iou=self.pred_iou
+                pred_iou=self.pred_iou,
             )
 
             losses = {}
@@ -96,11 +105,7 @@ class TwoStagePseudoLabGeneralizedRCNN(GeneralizedRCNN):
         do_postprocess: bool = True,
     ):
         if not self.pred_iou:
-            return super().inference(
-                batched_inputs,
-                detected_instances,
-                do_postprocess
-            )
+            return super().inference(batched_inputs, detected_instances, do_postprocess)
 
         assert not self.training
 
@@ -115,15 +120,20 @@ class TwoStagePseudoLabGeneralizedRCNN(GeneralizedRCNN):
                 proposals = [x["proposals"].to(self.device) for x in batched_inputs]
 
             results, _ = self.roi_heads(
-                images, features, proposals, None,
-                pred_iou=self.pred_iou
+                images, features, proposals, None, pred_iou=self.pred_iou
             )
         else:
             detected_instances = [x.to(self.device) for x in detected_instances]
-            results = self.roi_heads.forward_with_given_boxes(features, detected_instances)
+            results = self.roi_heads.forward_with_given_boxes(
+                features, detected_instances
+            )
 
         if do_postprocess:
-            assert not torch.jit.is_scripting(), "Scripting is not supported for postprocess."
-            return GeneralizedRCNN._postprocess(results, batched_inputs, images.image_sizes)
+            assert (
+                not torch.jit.is_scripting()
+            ), "Scripting is not supported for postprocess."
+            return GeneralizedRCNN._postprocess(
+                results, batched_inputs, images.image_sizes
+            )
         else:
             return results

@@ -1,25 +1,19 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
-import torch
 from typing import Dict, List, Optional, Tuple, Union
-from detectron2.structures import Boxes, ImageList, Instances, pairwise_iou
+
+import numpy as np
+import torch
+from detectron2.layers import ShapeSpec
+from detectron2.modeling.poolers import ROIPooler
 from detectron2.modeling.proposal_generator.proposal_utils import (
     add_ground_truth_to_proposals,
 )
-from detectron2.utils.events import get_event_storage
+from detectron2.modeling.roi_heads import ROI_HEADS_REGISTRY, StandardROIHeads
 from detectron2.modeling.roi_heads.box_head import build_box_head
-from detectron2.layers import ShapeSpec
-from detectron2.modeling.roi_heads import (
-    ROI_HEADS_REGISTRY,
-    StandardROIHeads,
-)
 from detectron2.modeling.roi_heads.fast_rcnn import FastRCNNOutputLayers
+from detectron2.structures import Boxes, ImageList, Instances, pairwise_iou
+from detectron2.utils.events import get_event_storage
 from ubteacher.modeling.roi_heads.fast_rcnn import FastRCNNFocaltLossOutputLayers
-
-import numpy as np
-from detectron2.modeling.poolers import ROIPooler
-
-from pprint import pprint
-import sys
 
 
 @ROI_HEADS_REGISTRY.register()
@@ -98,15 +92,18 @@ class StandardROIHeadsPseudoLab(StandardROIHeads):
 
         if (self.training and compute_loss) or compute_val_loss:
             losses, _ = self._forward_box(
-                features, proposals, compute_loss,
-                compute_val_loss, pred_iou, branch,
-                weight_on_iou=weight_on_iou
+                features,
+                proposals,
+                compute_loss,
+                compute_val_loss,
+                pred_iou,
+                branch,
+                weight_on_iou=weight_on_iou,
             )
             return proposals, losses
         else:
             pred_instances, predictions = self._forward_box(
-                features, proposals, compute_loss,
-                compute_val_loss, pred_iou, branch
+                features, proposals, compute_loss, compute_val_loss, pred_iou, branch
             )
 
             return pred_instances, predictions
@@ -119,7 +116,7 @@ class StandardROIHeadsPseudoLab(StandardROIHeads):
         compute_val_loss: bool = False,
         pred_iou: bool = False,
         branch: str = "",
-        weight_on_iou: bool = False
+        weight_on_iou: bool = False,
     ) -> Union[Dict[str, torch.Tensor], List[Instances]]:
         features = [features[f] for f in self.box_in_features]
         box_features = self.box_pooler(features, [x.proposal_boxes for x in proposals])
@@ -130,9 +127,9 @@ class StandardROIHeadsPseudoLab(StandardROIHeads):
         if (
             self.training and compute_loss
         ) or compute_val_loss:  # apply if training loss or val loss
-            losses = self.box_predictor.losses(predictions, proposals,
-                                               pred_iou=pred_iou,
-                                               weight_on_iou=weight_on_iou)
+            losses = self.box_predictor.losses(
+                predictions, proposals, pred_iou=pred_iou, weight_on_iou=weight_on_iou
+            )
 
             if self.train_on_pred_boxes:
                 with torch.no_grad():
@@ -146,8 +143,9 @@ class StandardROIHeadsPseudoLab(StandardROIHeads):
             return losses, predictions
         else:
 
-            pred_instances, _ = self.box_predictor.inference(predictions, proposals,
-                                                             pred_iou=pred_iou)
+            pred_instances, _ = self.box_predictor.inference(
+                predictions, proposals, pred_iou=pred_iou
+            )
             return pred_instances, predictions
 
     @torch.no_grad()

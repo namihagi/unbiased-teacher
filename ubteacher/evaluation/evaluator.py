@@ -12,8 +12,13 @@ from detectron2.utils.logger import log_every_n_seconds
 
 
 def inference_on_dataset_for_pseudo_label(
-    model, data_loader, evaluator, with_iou=False,
-    cur_threshold=0.7, iou_filtering="thresholding", iou_threshold=0.5
+    model,
+    data_loader,
+    evaluator,
+    with_iou=False,
+    cur_threshold=0.7,
+    iou_filtering="thresholding",
+    iou_threshold=0.5,
 ):
     num_devices = get_world_size()
     # inference data loader must have a fixed length
@@ -48,20 +53,16 @@ def inference_on_dataset_for_pseudo_label(
                 start_compute_time = time.perf_counter()
                 with torch.no_grad():
                     _, _, proposals_roih_unsup_k, _ = model(
-                        inputs,
-                        branch="unsup_data_weak",
-                        pred_iou=with_iou
+                        inputs, branch="unsup_data_weak"
                     )
 
-                (
-                    pseudo_instances
-                ) = process_pseudo_label(
+                (pseudo_instances) = process_pseudo_label(
                     proposals_roih_unsup_k,
                     cur_threshold,
                     pseudo_label_method="thresholding",
                     with_iou=with_iou,
                     iou_filtering=iou_filtering,
-                    iou_threshold=iou_threshold
+                    iou_threshold=iou_threshold,
                 )
 
                 if torch.cuda.is_available():
@@ -76,10 +77,13 @@ def inference_on_dataset_for_pseudo_label(
                 data_seconds_per_iter = total_data_time / iters_after_start
                 compute_seconds_per_iter = total_compute_time / iters_after_start
                 eval_seconds_per_iter = total_eval_time / iters_after_start
-                total_seconds_per_iter = (time.perf_counter() - start_time) / iters_after_start
+                total_seconds_per_iter = (
+                    time.perf_counter() - start_time
+                ) / iters_after_start
                 if idx >= num_warmup * 2 or compute_seconds_per_iter > 5:
-                    eta = datetime.timedelta(seconds=int(
-                        total_seconds_per_iter * (total - idx - 1)))
+                    eta = datetime.timedelta(
+                        seconds=int(total_seconds_per_iter * (total - idx - 1))
+                    )
                     log_every_n_seconds(
                         logging.INFO,
                         (
@@ -106,7 +110,9 @@ def inference_on_dataset_for_pseudo_label(
     total_compute_time_str = str(datetime.timedelta(seconds=int(total_compute_time)))
     logger.info(
         "Total inference pure compute time: {} ({:.6f} s / iter per device, on {} devices)".format(
-            total_compute_time_str, total_compute_time / (total - num_warmup), num_devices
+            total_compute_time_str,
+            total_compute_time / (total - num_warmup),
+            num_devices,
         )
     )
 
@@ -119,17 +125,23 @@ def inference_on_dataset_for_pseudo_label(
 
 
 def process_pseudo_label(
-    proposals_rpn_unsup_k, cur_threshold, pseudo_label_method="",
-    with_iou=False, iou_filtering="thresholding", iou_threshold=0.5
+    proposals_rpn_unsup_k,
+    cur_threshold,
+    pseudo_label_method="",
+    with_iou=False,
+    iou_filtering="thresholding",
+    iou_threshold=0.5,
 ):
     list_instances = []
     for proposal_bbox_inst in proposals_rpn_unsup_k:
         # thresholding
         if pseudo_label_method == "thresholding":
             proposal_bbox_inst = threshold_bbox(
-                proposal_bbox_inst, thres=cur_threshold,
-                with_iou=with_iou, iou_filtering=iou_filtering,
-                iou_thres=iou_threshold
+                proposal_bbox_inst,
+                thres=cur_threshold,
+                with_iou=with_iou,
+                iou_filtering=iou_filtering,
+                iou_thres=iou_threshold,
             )
         else:
             raise ValueError("Unkown pseudo label boxes methods")
@@ -138,9 +150,11 @@ def process_pseudo_label(
 
 
 def threshold_bbox(
-    proposal_bbox_inst, thres=0.7,
-    with_iou=False, iou_filtering="thresholding",
-    iou_thres=0.5
+    proposal_bbox_inst,
+    thres=0.7,
+    with_iou=False,
+    iou_filtering="thresholding",
+    iou_thres=0.5,
 ):
     valid_map = proposal_bbox_inst.scores > thres
     if with_iou and iou_filtering == "thresholding":

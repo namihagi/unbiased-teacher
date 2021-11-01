@@ -18,25 +18,43 @@ def box_matching(
     results = {
         "num_gt_boxes": gt_boxes.shape[0],
         "num_pseudo_boxes": pseudo_boxes.shape[0],
+        "IoU_dist": compare_IoU(
+            gt_boxes, pseudo_boxes, pseudo_ious
+        ),
         "matching_on_gt": matching_based_on_gt(
-            gt_boxes, gt_classes,
-            pseudo_boxes, pseudo_classes, pseudo_ious
+            gt_boxes, gt_classes, pseudo_boxes, pseudo_classes, pseudo_ious
         ),
         "matching_on_pseudo": matching_based_on_gt(
-            pseudo_boxes, pseudo_classes,
-            gt_boxes, gt_classes,
+            pseudo_boxes,
+            pseudo_classes,
+            gt_boxes,
+            gt_classes,
         ),
         "matching_labels_on_gt": matching_labels(
-            gt_boxes, gt_classes,
-            pseudo_boxes, pseudo_classes, pseudo_ious
+            gt_boxes, gt_classes, pseudo_boxes, pseudo_classes, pseudo_ious
         ),
         "matching_labels_on_pseudo": matching_labels(
-            pseudo_boxes, pseudo_classes,
-            gt_boxes, gt_classes,
+            pseudo_boxes,
+            pseudo_classes,
+            gt_boxes,
+            gt_classes,
         ),
     }
 
     return results
+
+
+def compare_IoU(
+    gt_boxes: torch.Tensor,
+    pseudo_boxes: torch.Tensor,
+    pseudo_ious: torch.Tensor = None,
+):
+    gt_boxes = Boxes(gt_boxes)
+    pseudo_boxes = Boxes(pseudo_boxes)
+    iou = pairwise_iou(pseudo_boxes, gt_boxes)
+    max_iou_on_ps = iou.max(dim=1)[0]
+
+    return dict(iou=max_iou_on_ps, pseudo_ious=pseudo_ious)
 
 
 def matching_based_on_gt(
@@ -44,11 +62,10 @@ def matching_based_on_gt(
     gt_classes: torch.Tensor,
     pseudo_boxes: torch.Tensor,
     pseudo_classes: torch.Tensor,
-    pseudo_ious: torch.Tensor = None
+    pseudo_ious: torch.Tensor = None,
 ):
     gt_classes_bincount = torch.bincount(gt_classes)
-    gt_labels_list = \
-        (gt_classes_bincount != 0).nonzero(as_tuple=True)[0]
+    gt_labels_list = (gt_classes_bincount != 0).nonzero(as_tuple=True)[0]
 
     results = dict()
 
@@ -68,9 +85,7 @@ def matching_based_on_gt(
 
             sorted_iou_flat_idx = iou.flatten().argsort(descending=True)
             sorted_iou_idx_list = convert_2d_idx(
-                sorted_iou_flat_idx,
-                num_gt_box,
-                num_pseudo_box
+                sorted_iou_flat_idx, num_gt_box, num_pseudo_box
             )
 
             matched_gt_idx = []
@@ -78,9 +93,9 @@ def matching_based_on_gt(
             ious_of_matched_pairs = []
             for gt_idx, pseudo_idx in sorted_iou_idx_list:
                 if (
-                        (gt_idx not in matched_gt_idx)
-                        and (pseudo_idx not in matched_pseudo_idx)
-                        and iou[gt_idx, pseudo_idx] > 0.0
+                    (gt_idx not in matched_gt_idx)
+                    and (pseudo_idx not in matched_pseudo_idx)
+                    and iou[gt_idx, pseudo_idx] > 0.0
                 ):
                     matched_gt_idx.append(gt_idx)
                     matched_pseudo_idx.append(pseudo_idx)
@@ -94,7 +109,7 @@ def matching_based_on_gt(
             results_idx = gt_cls.item()
             results[results_idx] = {
                 "num_gt_per_cls": num_gt_box,
-                "ious_of_matched_pairs": ious_of_matched_pairs
+                "ious_of_matched_pairs": ious_of_matched_pairs,
             }
             if pseudo_ious is not None:
                 if len(matched_pseudo_idx):
@@ -102,7 +117,7 @@ def matching_based_on_gt(
                     matched_pseudo_ious = pseudo_iou[matched_pseudo_idx]
                 else:
                     matched_pseudo_ious = pseudo_boxes.new_tensor([])
-                results[results_idx]['matched_pseudo_ious'] = matched_pseudo_ious
+                results[results_idx]["matched_pseudo_ious"] = matched_pseudo_ious
 
     return results
 
@@ -112,7 +127,7 @@ def matching_labels(
     gt_classes: torch.Tensor,
     pseudo_boxes: torch.Tensor,
     pseudo_classes: torch.Tensor,
-    pseudo_ious: torch.Tensor = None
+    pseudo_ious: torch.Tensor = None,
 ):
     gt_boxes = Boxes(gt_boxes)
     num_gt_boxes = len(gt_boxes)
@@ -126,9 +141,7 @@ def matching_labels(
 
         sorted_iou_flat_idx = iou.flatten().argsort(descending=True)
         sorted_iou_idx_list = convert_2d_idx(
-            sorted_iou_flat_idx,
-            num_gt_boxes,
-            num_pseudo_boxes
+            sorted_iou_flat_idx, num_gt_boxes, num_pseudo_boxes
         )
 
         matched_gt_idx = []
@@ -136,9 +149,9 @@ def matching_labels(
         ious_of_matched_pairs = []
         for gt_idx, pseudo_idx in sorted_iou_idx_list:
             if (
-                    (gt_idx not in matched_gt_idx)
-                    and (pseudo_idx not in matched_pseudo_idx)
-                    and iou[gt_idx, pseudo_idx] > 0.0
+                (gt_idx not in matched_gt_idx)
+                and (pseudo_idx not in matched_pseudo_idx)
+                and iou[gt_idx, pseudo_idx] > 0.0
             ):
                 matched_gt_idx.append(gt_idx)
                 matched_pseudo_idx.append(pseudo_idx)
@@ -160,11 +173,13 @@ def matching_labels(
             if pseudo_ious is not None:
                 matched_pseudo_ious = pseudo_ious.new_tensor([])
 
-        results.update({
-            "ious_of_matched_pairs": ious_of_matched_pairs,
-            "matched_gt_labels": matched_gt_classes,
-            "matched_pseudo_labels": matched_pseudo_classes
-        })
+        results.update(
+            {
+                "ious_of_matched_pairs": ious_of_matched_pairs,
+                "matched_gt_labels": matched_gt_classes,
+                "matched_pseudo_labels": matched_pseudo_classes,
+            }
+        )
         if pseudo_ious is not None:
             results.update(dict(matched_pseudo_ious=matched_pseudo_ious))
 
