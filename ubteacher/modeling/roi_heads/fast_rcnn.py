@@ -1,5 +1,5 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
-from typing import Dict, List, Tuple, Union
+from typing import List, Tuple
 
 import torch
 from detectron2.layers import batched_nms, cat, nonzero_tuple
@@ -28,7 +28,9 @@ class FastRCNNFocaltLossOutputLayers(FastRCNNOutputLayers):
             out_features //= box_dim
             self.iou_pred = nn.Linear(in_features, out_features)
             self.iou_loss_fn = cfg.MODEL.ROI_HEADS.IOU_HEAD_LOSS
-            self.bbox_psuedo_reg_loss_type = cfg.MODEL.ROI_BOX_HEAD.BBOX_PSUEDO_REG_LOSS_TYPE
+            self.bbox_psuedo_reg_loss_type = (
+                cfg.MODEL.ROI_BOX_HEAD.BBOX_PSUEDO_REG_LOSS_TYPE
+            )
             self.robust_func_c = cfg.MODEL.ROI_BOX_HEAD.ROBUST_FUNC_C
             self.use_det_score = cfg.MODEL.ROI_BOX_HEAD.USE_DET_SCORE
 
@@ -53,7 +55,8 @@ class FastRCNNFocaltLossOutputLayers(FastRCNNOutputLayers):
         """
         Args:
             predictions: return values of :meth:`forward()`.
-            proposals (list[Instances]): proposals that match the features that were used
+            proposals (list[Instances]):
+                proposals that match the features that were used
                 to compute predictions. The fields ``proposal_boxes``, ``gt_boxes``,
                 ``gt_classes`` are expected.
 
@@ -67,20 +70,29 @@ class FastRCNNFocaltLossOutputLayers(FastRCNNOutputLayers):
 
         # parse classification outputs
         gt_classes = (
-            cat([p.gt_classes for p in proposals], dim=0) if len(proposals) else torch.empty(0)
+            cat([p.gt_classes for p in proposals], dim=0)
+            if len(proposals)
+            else torch.empty(0)
         )
         _log_classification_stats(scores, gt_classes)
 
         # parse box regression outputs
         if len(proposals):
-            proposal_boxes = cat([p.proposal_boxes.tensor for p in proposals], dim=0)  # Nx4
-            assert not proposal_boxes.requires_grad, "Proposals should not require gradients!"
+            proposal_boxes = cat(
+                [p.proposal_boxes.tensor for p in proposals], dim=0
+            )  # Nx4
+            assert (
+                not proposal_boxes.requires_grad
+            ), "Proposals should not require gradients!"
             # If "gt_boxes" does not exist, the proposals must be all negative and
             # should not be included in regression loss computation.
             # Here we just use proposal_boxes as an arbitrary placeholder because its
             # value won't be used in self.box_reg_loss().
             gt_boxes = cat(
-                [(p.gt_boxes if p.has("gt_boxes") else p.proposal_boxes).tensor for p in proposals],
+                [
+                    (p.gt_boxes if p.has("gt_boxes") else p.proposal_boxes).tensor
+                    for p in proposals
+                ],
                 dim=0,
             )
             if pred_iou and weight_on_iou:
@@ -98,7 +110,9 @@ class FastRCNNFocaltLossOutputLayers(FastRCNNOutputLayers):
                 weight_for_box_reg = None
 
         else:
-            proposal_boxes = gt_boxes = torch.empty((0, 4), device=proposal_deltas.device)
+            proposal_boxes = gt_boxes = torch.empty(
+                (0, 4), device=proposal_deltas.device
+            )
             weight_for_box_reg = None
 
         losses = {
@@ -161,10 +175,13 @@ class FastRCNNFocaltLossOutputLayers(FastRCNNOutputLayers):
             R shall be the number of proposals.
         """
         if not weight_on_iou:
-            return super().box_reg_loss(proposal_boxes, gt_boxes, pred_deltas, gt_classes)
+            return super().box_reg_loss(
+                proposal_boxes, gt_boxes, pred_deltas, gt_classes
+            )
 
         box_dim = proposal_boxes.shape[1]  # 4 or 5
-        # Regression loss is only computed for foreground proposals (those matched to a GT)
+        # Regression loss is only computed
+        # for foreground proposals (those matched to a GT)
         fg_inds = nonzero_tuple((gt_classes >= 0) & (gt_classes < self.num_classes))[0]
         if pred_deltas.shape[1] == box_dim:  # cls-agnostic regression
             fg_pred_deltas = pred_deltas[fg_inds]
@@ -189,7 +206,10 @@ class FastRCNNFocaltLossOutputLayers(FastRCNNOutputLayers):
                 fg_pred_deltas, proposal_boxes[fg_inds]
             )
             loss_box_reg = giou_loss(fg_pred_boxes, gt_boxes[fg_inds], reduction="none")
-        elif weight_for_box_reg is not None and self.bbox_psuedo_reg_loss_type == "robust_loss":
+        elif (
+            weight_for_box_reg is not None
+            and self.bbox_psuedo_reg_loss_type == "robust_loss"
+        ):
             gt_pred_deltas = self.box2box_transform.get_deltas(
                 proposal_boxes[fg_inds],
                 gt_boxes[fg_inds],
@@ -202,17 +222,23 @@ class FastRCNNFocaltLossOutputLayers(FastRCNNOutputLayers):
                 reduction="none",
             )
         else:
-            raise ValueError(f"Invalid bbox reg loss type '{self.bbox_psuedo_reg_loss_type}'")
+            raise ValueError(
+                f"Invalid bbox reg loss type '{self.bbox_psuedo_reg_loss_type}'"
+            )
 
-        if weight_for_box_reg is not None and self.bbox_psuedo_reg_loss_type != "robust_loss":
+        if (
+            weight_for_box_reg is not None
+            and self.bbox_psuedo_reg_loss_type != "robust_loss"
+        ):
             fg_weight_for_box_reg = weight_for_box_reg.unsqueeze(dim=-1)[fg_inds]
             loss_box_reg = (loss_box_reg * fg_weight_for_box_reg).sum()
         else:
             loss_box_reg = loss_box_reg.sum()
 
-        # The reg loss is normalized using the total number of regions (R), not the number
-        # of foreground regions even though the box regression loss is only defined on
-        # foreground regions. Why? Because doing so gives equal training influence to
+        # The reg loss is normalized using the total number of regions (R),
+        # not the number of foreground regions
+        # even though the box regression loss is only defined on foreground regions.
+        # Why? Because doing so gives equal training influence to
         # each foreground example. To see how, consider two different minibatches:
         #  (1) Contains a single foreground region
         #  (2) Contains 100 foreground regions
@@ -223,7 +249,9 @@ class FastRCNNFocaltLossOutputLayers(FastRCNNOutputLayers):
         # in minibatch (2) are given equal influence.
         return loss_box_reg / max(gt_classes.numel(), 1.0)  # return 0 if empty
 
-    def iou_reg_loss(self, proposal_boxes, gt_boxes, pred_deltas, gt_classes, pred_ious):
+    def iou_reg_loss(
+        self, proposal_boxes, gt_boxes, pred_deltas, gt_classes, pred_ious
+    ):
         box_dim = proposal_boxes.shape[1]  # 4 or 5
         # iou loss is only computed for foreground proposals like reg loss
         # (those matched to a GT)
@@ -235,10 +263,14 @@ class FastRCNNFocaltLossOutputLayers(FastRCNNOutputLayers):
             fg_pred_deltas = pred_deltas.view(-1, self.num_classes, box_dim)[
                 fg_inds, gt_classes[fg_inds]
             ]
-            fg_pred_ious = pred_ious.view(-1, self.num_classes)[fg_inds, gt_classes[fg_inds]]
+            fg_pred_ious = pred_ious.view(-1, self.num_classes)[
+                fg_inds, gt_classes[fg_inds]
+            ]
 
         # get preditions in format [x1, x2, y1, y2]
-        fg_pred_boxes = self.box2box_transform.apply_deltas(fg_pred_deltas, proposal_boxes[fg_inds])
+        fg_pred_boxes = self.box2box_transform.apply_deltas(
+            fg_pred_deltas, proposal_boxes[fg_inds]
+        )
         # calculate iou between predictons and ground truth
         iou_targets = box_iou(fg_pred_boxes, gt_boxes[fg_inds])
         iou_ids = tuple(range(iou_targets.size(0)))
@@ -326,27 +358,38 @@ def fast_rcnn_inference_with_iou(
     Call `fast_rcnn_inference_single_image` for all images.
 
     Args:
-        boxes (list[Tensor]): A list of Tensors of predicted class-specific or class-agnostic
+        boxes (list[Tensor]):
+            A list of Tensors of predicted class-specific or class-agnostic
             boxes for each image. Element i has shape (Ri, K * 4) if doing
             class-specific regression, or (Ri, 4) if doing class-agnostic
             regression, where Ri is the number of predicted objects for image i.
-            This is compatible with the output of :meth:`FastRCNNOutputLayers.predict_boxes`.
-        scores (list[Tensor]): A list of Tensors of predicted class scores for each image.
-            Element i has shape (Ri, K + 1), where Ri is the number of predicted objects
-            for image i. Compatible with the output of :meth:`FastRCNNOutputLayers.predict_probs`.
-        ious (list[Tensor]): A list of Tensors of predicted class-specific or class-agnostic
-            ious for each image.
-        image_shapes (list[tuple]): A list of (width, height) tuples for each image in the batch.
-        score_thresh (float): Only return detections with a confidence score exceeding this
-            threshold.
-        nms_thresh (float):  The threshold to use for box non-maximum suppression. Value in [0, 1].
-        topk_per_image (int): The number of top scoring detections to return. Set < 0 to return
-            all detections.
+            This is compatible with the output of
+            :meth:`FastRCNNOutputLayers.predict_boxes`.
+        scores (list[Tensor]):
+            A list of Tensors of predicted class scores for each image.
+            Element i has shape (Ri, K + 1),
+            where Ri is the number of predicted objects
+            for image i. Compatible with the output of
+            :meth:`FastRCNNOutputLayers.predict_probs`.
+        ious (list[Tensor]):
+            A list of Tensors of predicted class-specific
+            or class-agnostic ious for each image.
+        image_shapes (list[tuple]):
+            A list of (width, height) tuples for each image in the batch.
+        score_thresh (float):
+            Only return detections with a confidence score exceeding this threshold.
+        nms_thresh (float):
+            The threshold to use for box non-maximum suppression. Value in [0, 1].
+        topk_per_image (int):
+            The number of top scoring detections to return.
+            Set < 0 to return all detections.
 
     Returns:
-        instances: (list[Instances]): A list of N instances, one for each image in the batch,
+        instances: (list[Instances]):
+            A list of N instances, one for each image in the batch,
             that stores the topk most confidence detections.
-        kept_indices: (list[Tensor]): A list of 1D tensor of length of N, each element indicates
+        kept_indices: (list[Tensor]):
+            A list of 1D tensor of length of N, each element indicates
             the corresponding boxes/scores index in [0, Ri) from the input, for image i.
     """
     result_per_image = [
@@ -450,7 +493,8 @@ def robust_loss(
     reduction: str = "none",
 ) -> torch.Tensor:
     """
-    general robust loss defined in the paper "A General and Adaptive Robust Loss Function"
+    general robust loss defined in the paper
+    "A General and Adaptive Robust Loss Function"
 
     Args:
         fg_pred_deltas (Tensor): input tensor of any shape
@@ -471,7 +515,9 @@ def robust_loss(
     # loss for alpha (-Inf, 1] except 0
     abs_alpha_minus_2 = torch.abs(alpha - 2.0)
     inner_func = (torch.pow(x / param_c, 2.0) / abs_alpha_minus_2) + 1.0
-    loss_otherwise = (abs_alpha_minus_2 / alpha) * (torch.pow(inner_func, alpha / 2.0) - 1.0)
+    loss_otherwise = (abs_alpha_minus_2 / alpha) * (
+        torch.pow(inner_func, alpha / 2.0) - 1.0
+    )
 
     # loss for alpha 0
     loss_0 = torch.log(0.5 * torch.pow(x / param_c, 2.0) + 1.0)
