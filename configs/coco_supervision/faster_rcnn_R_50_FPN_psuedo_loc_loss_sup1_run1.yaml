@@ -1,0 +1,3 @@
+_BASE_: "./faster_rcnn_R_50_FPN_sup1_run1.yaml"
+SEMISUPNET:
+  CALC_PSEUDO_LOC_LOSS: True
