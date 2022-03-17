@@ -1,0 +1,13 @@
+_BASE_: "../coco_supervision/faster_rcnn_R_50_FPN_sup1_run1.yaml"
+MODEL:
+  ROI_HEADS:
+    IOU_HEAD: True
+    IOU_HEAD_LOSS: "BinaryCrossEntropy"
+  ROI_BOX_HEAD:
+    BBOX_PSUEDO_REG_LOSS_TYPE: "robust_loss"
+DATALOADER:
+  SUP_PERCENT: 1.0
+  RANDOM_DATA_SEED: 1
+SEMISUPNET:
+  CALC_PSEUDO_LOC_LOSS: True
+  IOU_FILTERING: "weighting_loss"

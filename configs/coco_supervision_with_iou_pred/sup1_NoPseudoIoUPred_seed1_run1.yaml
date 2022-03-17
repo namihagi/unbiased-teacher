@@ -1,0 +1,3 @@
+_BASE_: "./sup1_IoUPred_RobustLoss_seed1_run1.yaml"
+SEMISUPNET:
+  CALC_PSEUDO_IOU_LOSS: False
