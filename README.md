@@ -34,6 +34,7 @@ https://github.com/facebookresearch/unbiased-teacher#installation
 
 - データセットの配置
 
+  [COCO データセットのダウンロードページ](https://cocodataset.org/#download)より「2017 train image」「2017 val images」「2017 unlabeled images」「2017 Train/Val annotations」をダウンロード。  
   データセットのファイル配置は以下のようにしてください。
 
   ```
@@ -44,6 +45,7 @@ https://github.com/facebookresearch/unbiased-teacher#installation
   └── coco/
         ├── train2017/
         ├── val2017/
+        ├── unlabeled2017/
         └── annotations/
               ├── instances_train2017.json
               └── instances_val2017.json
