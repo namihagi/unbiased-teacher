@@ -51,6 +51,8 @@ https://github.com/facebookresearch/unbiased-teacher#installation
 
 ## 実行方法
 
+実行するブランチは **develop** です。
+
 ```shell
 python train_net.py \
       --num-gpus 8 \
